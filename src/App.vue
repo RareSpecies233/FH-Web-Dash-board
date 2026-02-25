@@ -199,6 +199,7 @@ let testEndNoticeTimer = null
 let lastAccelRenderAtMs = 0
 let manualStartTimer = null
 let launchBurstTimer = null
+let launchBurstIdSeed = 0
 
 const activeSummary = computed(() => {
   if (testRunning.value) return runningSummary.value
@@ -577,22 +578,24 @@ function createLaunchStars(count = 90) {
   })
 }
 
-function createLaunchBursts(count = 34) {
-  return Array.from({ length: count }, (_, index) => {
+function createLaunchBurst() {
+  const index = launchBurstIdSeed++
     const angle = (Math.random() * 360).toFixed(1)
     const length = (Math.random() * 320 + 150).toFixed(1)
-    const travel = (Math.random() * 300 + 150).toFixed(1)
+    const travel = (Math.random() * 70 + 78).toFixed(1)
     const thickness = (Math.random() * 6.8 + 2.8).toFixed(2)
-    const duration = (Math.random() * 1.1 + 0.5).toFixed(2)
+    const duration = (Math.random() * 1.6 + 1.2).toFixed(2)
     const delay = (Math.random() * 1.4).toFixed(2)
     const startHue = Math.random() > 0.5 ? 'rgba(250, 204, 21, 0.92)' : 'rgba(245, 158, 11, 0.9)'
     const endHue = Math.random() > 0.45 ? 'rgba(239, 68, 68, 0.96)' : 'rgba(220, 38, 38, 0.94)'
+    const lifeMs = (Number(duration) + Number(delay)) * 1000 + 120
     return {
       id: `b-${index}-${Date.now()}`,
+      lifeMs,
       style: {
         '--angle': `${angle}deg`,
         '--length': `${length}px`,
-        '--travel': `${travel}px`,
+        '--travel': `${travel}vmax`,
         '--thickness': `${thickness}px`,
         '--dur': `${duration}s`,
         '--delay': `${delay}s`,
@@ -600,7 +603,20 @@ function createLaunchBursts(count = 34) {
         '--c2': endHue,
       },
     }
-  })
+}
+
+function createLaunchBursts(count = 56) {
+  return Array.from({ length: count }, () => createLaunchBurst())
+}
+
+function emitLaunchBursts(count = 8) {
+  const created = Array.from({ length: count }, () => createLaunchBurst())
+  launchBursts.value = [...launchBursts.value, ...created]
+  for (const burst of created) {
+    setTimeout(() => {
+      launchBursts.value = launchBursts.value.filter((item) => item.id !== burst.id)
+    }, burst.lifeMs)
+  }
 }
 
 function clearLaunchBurstTimer() {
@@ -614,10 +630,10 @@ function scheduleLaunchBurstRefresh() {
   clearLaunchBurstTimer()
   const tick = () => {
     if (!launchModeActive.value) return
-    launchBursts.value = createLaunchBursts(56)
-    launchBurstTimer = setTimeout(tick, 220 + Math.random() * 320)
+    emitLaunchBursts(10)
+    launchBurstTimer = setTimeout(tick, 340 + Math.random() * 420)
   }
-  launchBurstTimer = setTimeout(tick, 260)
+  launchBurstTimer = setTimeout(tick, 360)
 }
 
 function startLaunchMode() {
@@ -629,7 +645,7 @@ function startLaunchMode() {
   launchZeroSinceMs.value = null
   launchExitBrakeLatched.value = false
   launchStars.value = createLaunchStars()
-  launchBursts.value = createLaunchBursts(56)
+  launchBursts.value = createLaunchBursts(84)
   scheduleLaunchBurstRefresh()
 }
 
@@ -1294,6 +1310,10 @@ function connectTelemetrySocket() {
           }
 
           if (launchModeActive.value) {
+            if (!launchStarted.value && accel < 90) {
+              stopLaunchMode()
+              return
+            }
             if (brake >= 100) launchExitBrakeLatched.value = true
             if (launchExitBrakeLatched.value && brake <= 0) {
               stopLaunchMode()

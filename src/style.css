@@ -728,16 +728,21 @@ body {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: calc(var(--length) * 0.2);
-  height: calc(var(--thickness) * 0.8);
+  width: var(--length);
+  height: var(--thickness);
   transform-origin: 0 50%;
-  transform: rotate(var(--angle)) translateX(0);
+  transform: rotate(var(--angle)) translateX(0) scaleX(0.2) scaleY(0.8);
   border-radius: 999px;
   background: linear-gradient(90deg, rgba(0, 0, 0, 0) 0%, var(--c1) 34%, var(--c2) 100%);
   filter: blur(0.75px);
   opacity: 0;
-  animation: burstLaunch var(--dur) linear infinite;
+  animation-name: burstLaunch;
+  animation-duration: calc((var(--base-dur) / var(--launch-burst-speed-factor, 1)) * 3);
+  animation-timing-function: linear;
+  animation-iteration-count: 1;
   animation-delay: var(--delay);
+  animation-fill-mode: forwards;
+  will-change: transform, opacity;
   pointer-events: none;
 }
 
@@ -754,9 +759,7 @@ body {
 
 @keyframes burstLaunch {
   0% {
-    width: calc(var(--length) * 0.2);
-    height: calc(var(--thickness) * 0.8);
-    transform: rotate(var(--angle)) translateX(0);
+    transform: rotate(var(--angle)) translateX(0) scaleX(0.2) scaleY(0.8);
     opacity: 0;
   }
   10% {
@@ -766,9 +769,7 @@ body {
     opacity: 0.95;
   }
   100% {
-    width: var(--length);
-    height: calc(var(--thickness) * 2.8);
-    transform: rotate(var(--angle)) translateX(var(--travel));
+    transform: rotate(var(--angle)) translateX(var(--travel)) scaleX(1) scaleY(2.8);
     opacity: 0;
   }
 }

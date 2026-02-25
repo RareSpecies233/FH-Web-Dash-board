@@ -47,6 +47,12 @@ function toPercent(value) {
   return Math.round((value / 255) * 100)
 }
 
+function toSteerPercent(value) {
+  if (value === null || value === undefined) return null
+  const normalized = Math.max(-127, Math.min(127, value)) / 127
+  return Math.round(normalized * 100)
+}
+
 function toGearDisplay(gear) {
   if (gear === null || gear === undefined) return '--'
   if (gear === 0) return 'R'
@@ -56,6 +62,9 @@ function toGearDisplay(gear) {
 
 export function parseForzaTelemetry(buffer) {
   const r = new Reader(buffer)
+  const packetSize = buffer.length
+  const hasDash = packetSize >= 311
+  const hasHorizonDashPadding = packetSize >= 323
 
   const data = {
     isRaceOn: r.int32(),
@@ -132,37 +141,81 @@ export function parseForzaTelemetry(buffer) {
     drivetrainTypeRaw: r.int32(),
     numCylinders: r.int32(),
 
-    positionX: r.float32(),
-    positionY: r.float32(),
-    positionZ: r.float32(),
+    horizonPlaceholder1: null,
+    horizonPlaceholder2: null,
+    horizonPlaceholder3: null,
 
-    speed: r.float32(),
-    power: r.float32(),
-    torque: r.float32(),
+    positionX: null,
+    positionY: null,
+    positionZ: null,
 
-    tireTempFrontLeft: r.float32(),
-    tireTempFrontRight: r.float32(),
-    tireTempRearLeft: r.float32(),
-    tireTempRearRight: r.float32(),
+    speed: null,
+    power: null,
+    torque: null,
 
-    boost: r.float32(),
-    fuel: r.float32(),
-    distanceTraveled: r.float32(),
-    bestLap: r.float32(),
-    lastLap: r.float32(),
-    currentLap: r.float32(),
-    currentRaceTime: r.float32(),
+    tireTempFrontLeft: null,
+    tireTempFrontRight: null,
+    tireTempRearLeft: null,
+    tireTempRearRight: null,
 
-    lapNumber: r.uint16(),
-    racePosition: r.uint8(),
-    accelRaw: r.uint8(),
-    brakeRaw: r.uint8(),
-    clutchRaw: r.uint8(),
-    handBrakeRaw: r.uint8(),
-    gearRaw: r.uint8(),
-    steerRaw: r.int8(),
-    normalizedDrivingLine: r.uint8(),
-    normalizedAiBrakeDifference: r.int8(),
+    boost: null,
+    fuel: null,
+    distanceTraveled: null,
+    bestLap: null,
+    lastLap: null,
+    currentLap: null,
+    currentRaceTime: null,
+
+    lapNumber: null,
+    racePosition: null,
+    accelRaw: null,
+    brakeRaw: null,
+    clutchRaw: null,
+    handBrakeRaw: null,
+    gearRaw: null,
+    steerRaw: null,
+    normalizedDrivingLine: null,
+    normalizedAiBrakeDifference: null,
+  }
+
+  if (hasDash) {
+    if (hasHorizonDashPadding) {
+      data.horizonPlaceholder1 = r.int32()
+      data.horizonPlaceholder2 = r.uint32()
+      data.horizonPlaceholder3 = r.uint32()
+    }
+
+    data.positionX = r.float32()
+    data.positionY = r.float32()
+    data.positionZ = r.float32()
+
+    data.speed = r.float32()
+    data.power = r.float32()
+    data.torque = r.float32()
+
+    data.tireTempFrontLeft = r.float32()
+    data.tireTempFrontRight = r.float32()
+    data.tireTempRearLeft = r.float32()
+    data.tireTempRearRight = r.float32()
+
+    data.boost = r.float32()
+    data.fuel = r.float32()
+    data.distanceTraveled = r.float32()
+    data.bestLap = r.float32()
+    data.lastLap = r.float32()
+    data.currentLap = r.float32()
+    data.currentRaceTime = r.float32()
+
+    data.lapNumber = r.uint16()
+    data.racePosition = r.uint8()
+    data.accelRaw = r.uint8()
+    data.brakeRaw = r.uint8()
+    data.clutchRaw = r.uint8()
+    data.handBrakeRaw = r.uint8()
+    data.gearRaw = r.uint8()
+    data.steerRaw = r.int8()
+    data.normalizedDrivingLine = r.int8()
+    data.normalizedAiBrakeDifference = r.int8()
   }
 
   const speed = data.speed ?? 0
@@ -175,9 +228,10 @@ export function parseForzaTelemetry(buffer) {
     brake: toPercent(data.brakeRaw),
     clutch: toPercent(data.clutchRaw),
     handBrake: toPercent(data.handBrakeRaw),
-    steerPercent: toPercent((data.steerRaw ?? 0) + 128) - 50,
+    steerPercent: toSteerPercent(data.steerRaw),
     drivetrainType: DRIVE_TYPE[data.drivetrainTypeRaw] ?? `${data.drivetrainTypeRaw ?? '--'}`,
     gearDisplay: toGearDisplay(data.gearRaw),
-    packetSize: buffer.length,
+    packetSize,
+    packetFormat: hasDash ? (hasHorizonDashPadding ? 'dash-horizon' : 'dash') : 'sled',
   }
 }

@@ -36,6 +36,14 @@ npm run dev
 
 打开浏览器访问 Vite 提示的地址（默认 `http://localhost:5173`）。
 
+局域网设备访问时请使用：
+
+```bash
+npm run dev -- --host
+```
+
+然后在其他设备访问你电脑的局域网地址（例如 `http://192.168.1.10:5173`）。
+
 ## 4. 游戏内设置（FH4/FH5）
 
 在 Forza Horizon 的设置里找到 Data Out（遥测输出）相关选项：
@@ -50,3 +58,6 @@ npm run dev
 
 - 浏览器本身不能直接监听 UDP，所以必须先运行本地 UDP 网关。
 - 当前解析兼容 Forza Horizon 常见 Data Out Dash 格式字段，页面已中文标注核心实时指标。
+- 前端默认会自动连接到“当前访问页面的主机名 + 8080 端口”对应的 WebSocket（适配跨设备访问）。
+- 如需自定义，可在启动前端时设置：`VITE_WS_HOST`、`VITE_WS_PORT`。
+- 网关监听地址可设置：`WS_HOST`、`WS_PORT`、`UDP_HOST`、`UDP_PORT`。

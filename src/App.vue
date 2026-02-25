@@ -1,7 +1,10 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
-const wsPort = 8080
+const wsPort = Number(import.meta.env.VITE_WS_PORT || 8080)
+const wsHost = import.meta.env.VITE_WS_HOST || window.location.hostname
+const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+const wsUrl = `${wsProtocol}://${wsHost}:${wsPort}`
 const connectionStatus = ref('未连接')
 const lastUpdated = ref('-')
 const telemetry = ref(null)
@@ -76,6 +79,8 @@ const vehicleInfo = computed(() => {
     { label: '传动形式', value: telemetry.value.drivetrainType },
     { label: '气缸数', value: telemetry.value.numCylinders },
     { label: '已行驶距离', value: `${toNumber(telemetry.value.distanceTraveled, 2)} m` },
+    { label: '包格式', value: telemetry.value.packetFormat },
+    { label: '包长度', value: telemetry.value.packetSize },
   ]
 })
 
@@ -95,7 +100,7 @@ function formatValue(item) {
 
 function connectTelemetrySocket() {
   connectionStatus.value = '连接中'
-  ws = new WebSocket(`ws://localhost:${wsPort}`)
+  ws = new WebSocket(wsUrl)
 
   ws.onopen = () => {
     connectionStatus.value = '已连接'
@@ -139,6 +144,7 @@ onBeforeUnmount(() => {
       <h1>Forza Horizon 4/5 UDP 遥测面板</h1>
       <p>连接状态：{{ connectionStatus }}｜最后更新：{{ lastUpdated }}</p>
       <p class="tips">请先启动 `npm run dev:server`，并在游戏中开启 Data Out (UDP)。</p>
+      <p class="tips">当前数据地址：{{ wsUrl }}</p>
     </header>
 
     <section class="card" v-if="vehicleInfo.length">

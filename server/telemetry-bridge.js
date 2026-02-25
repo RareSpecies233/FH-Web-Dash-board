@@ -4,10 +4,11 @@ import { parseForzaTelemetry } from './forzaTelemetryParser.js'
 
 const UDP_HOST = process.env.UDP_HOST || '0.0.0.0'
 const UDP_PORT = Number(process.env.UDP_PORT || 5300)
+const WS_HOST = process.env.WS_HOST || '0.0.0.0'
 const WS_PORT = Number(process.env.WS_PORT || 8080)
 
 const udpServer = dgram.createSocket('udp4')
-const wss = new WebSocketServer({ port: WS_PORT })
+const wss = new WebSocketServer({ host: WS_HOST, port: WS_PORT })
 
 wss.on('connection', (socket) => {
   socket.send(
@@ -21,7 +22,7 @@ wss.on('connection', (socket) => {
 udpServer.on('listening', () => {
   const address = udpServer.address()
   console.log(`UDP监听中：${address.address}:${address.port}`)
-  console.log(`WebSocket服务：ws://localhost:${WS_PORT}`)
+  console.log(`WebSocket服务：ws://${WS_HOST}:${WS_PORT}`)
 })
 
 udpServer.on('message', (message) => {

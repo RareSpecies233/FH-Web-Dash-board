@@ -9,10 +9,12 @@ const wsUrl = `${wsProtocol}://${wsHost}:${wsPort}`
 const storageKey = 'fh-accel-tests-v1'
 
 const activeView = ref('overview')
+const navCollapsed = ref(false)
 const connectionStatus = ref('未连接')
 const lastUpdated = ref('-')
 const telemetry = ref(null)
 const chartCanvas = ref(null)
+const gChartCanvas = ref(null)
 let ws = null
 
 const navItems = [
@@ -114,6 +116,19 @@ const steerPercent = computed(() => {
   const value = Number(telemetry.value?.steerPercent || 0)
   return Math.max(-100, Math.min(100, value))
 })
+const steerLeftPercent = computed(() => Math.max(0, -steerPercent.value))
+const steerRightPercent = computed(() => Math.max(0, steerPercent.value))
+
+const dashboardGear = computed(() => {
+  const gearRaw = telemetry.value?.gearRaw
+  if (gearRaw === 0) return 'R'
+  if (gearRaw !== null && gearRaw !== undefined) return `${gearRaw}`
+  const gearDisplay = telemetry.value?.gearDisplay
+  if (gearDisplay === 'N') return '1'
+  return gearDisplay ?? '--'
+})
+
+const handBrakeEngaged = computed(() => Number(telemetry.value?.handBrake || 0) >= 1)
 
 const rpmRatio = computed(() => Math.max(0, Math.min(1, rpmValue.value / Math.max(1, rpmMax.value))))
 const aiBrakeRatio = computed(() => {
@@ -126,6 +141,11 @@ const dashLowerStyle = computed(() => ({ backgroundColor: zoneColor(aiBrakeRatio
 
 const speedGaugeStyle = computed(() => getGaugeStyle(speedKmhValue.value, 420, '#2563eb'))
 const rpmGaugeStyle = computed(() => getGaugeStyle(rpmValue.value, rpmMax.value, zoneColor(rpmRatio.value)))
+const accelPageStyle = computed(() => ({ backgroundColor: testRunning.value ? zoneColor(rpmRatio.value) : '#ffffff' }))
+const zGValue = computed(() => {
+  const accelerationZ = Number(telemetry.value?.accelerationZ || 0)
+  return accelerationZ / 9.80665
+})
 
 const testRunning = ref(false)
 const testAutoArmed = ref(true)
@@ -141,6 +161,27 @@ const importedRun = ref(null)
 const activeMetricSamples = computed(() => {
   if (testRunning.value) return testSamples.value
   return latestRun.value?.samples || []
+})
+
+const gExtremes = computed(() => {
+  const samples = activeMetricSamples.value
+  if (!Array.isArray(samples) || samples.length === 0) {
+    return { maxAccelG: null, maxDecelG: null }
+  }
+  const gValues = samples.map((sample) => Number(sample.g)).filter((value) => Number.isFinite(value))
+  if (gValues.length === 0) return { maxAccelG: null, maxDecelG: null }
+
+  const maxAccel = Math.max(0, ...gValues)
+  const minDecel = Math.min(0, ...gValues)
+  return {
+    maxAccelG: maxAccel,
+    maxDecelG: minDecel,
+  }
+})
+
+const maxDecelGAbs = computed(() => {
+  if (gExtremes.value.maxDecelG == null) return null
+  return Math.abs(gExtremes.value.maxDecelG)
 })
 
 const primaryRun = computed(() => {
@@ -287,7 +328,7 @@ function startAccelerationTest() {
   testRunning.value = true
   testStartMs.value = performance.now()
   testMilestones.value = createMilestones()
-  testSamples.value = [{ t: 0, speed: speedKmhValue.value }]
+  testSamples.value = [{ t: 0, speed: speedKmhValue.value, g: zGValue.value }]
   const carOrdinal = telemetry.value?.carOrdinal ?? 0
   testMeta.value = {
     carOrdinal,
@@ -312,9 +353,15 @@ function recordAccelerationSample(data) {
   const now = performance.now()
   const elapsedSec = (now - testStartMs.value) / 1000
   const speed = Math.max(0, Number(data.speedKmh || 0))
+  const gValue = Number(data.accelerationZ || 0) / 9.80665
   const last = testSamples.value[testSamples.value.length - 1]
-  if (!last || elapsedSec - last.t >= 0.05 || Math.abs(speed - last.speed) >= 0.5) {
-    testSamples.value.push({ t: elapsedSec, speed })
+  if (
+    !last ||
+    elapsedSec - last.t >= 0.05 ||
+    Math.abs(speed - last.speed) >= 0.5 ||
+    Math.abs((last.g ?? 0) - gValue) >= 0.03
+  ) {
+    testSamples.value.push({ t: elapsedSec, speed, g: gValue })
   }
   const reached400 = maybeMarkMilestones(speed, elapsedSec)
   const backToZeroAfter100 = testMilestones.value.to100 !== null && speed <= 1 && elapsedSec > testMilestones.value.to100 + 0.2
@@ -408,22 +455,23 @@ function handleImportTxt(event) {
   event.target.value = ''
 }
 
-function drawCurveOnCanvas(context, canvas, run, color, xMax, yMax, left, top, width, height) {
+function drawCurveOnCanvas(context, run, color, xMax, yMin, yMax, left, top, width, height, valueKey) {
   if (!run || !Array.isArray(run.samples) || run.samples.length < 2) return
   context.strokeStyle = color
   context.lineWidth = 2
   context.beginPath()
   run.samples.forEach((sample, index) => {
     const x = left + (Math.max(0, sample.t) / xMax) * width
-    const y = top + height - (Math.max(0, sample.speed) / yMax) * height
+    const value = Number(sample[valueKey])
+    if (!Number.isFinite(value)) return
+    const y = top + height - ((value - yMin) / Math.max(0.0001, yMax - yMin)) * height
     if (index === 0) context.moveTo(x, y)
     else context.lineTo(x, y)
   })
   context.stroke()
 }
 
-function drawAccelerationChart() {
-  const canvas = chartCanvas.value
+function drawChart({ canvas, valueKey, yLabel, colors, minDefault, maxDefault }) {
   if (!canvas) return
   const rect = canvas.getBoundingClientRect()
   const dpr = window.devicePixelRatio || 1
@@ -452,29 +500,56 @@ function drawAccelerationChart() {
   if (runs.length === 0) return
 
   const maxT = Math.max(...runs.flatMap((run) => run.samples.map((sample) => sample.t)), 5)
-  const maxV = Math.max(...runs.flatMap((run) => run.samples.map((sample) => sample.speed)), 100)
-  const xMax = Math.ceil(maxT)
-  const yMax = Math.max(100, Math.ceil(maxV / 20) * 20)
+  const values = runs.flatMap((run) => run.samples.map((sample) => Number(sample[valueKey]))).filter((item) => Number.isFinite(item))
+  if (values.length === 0) return
 
-  drawCurveOnCanvas(context, canvas, primaryRun.value, '#2563eb', xMax, yMax, left, top, width, height)
-  drawCurveOnCanvas(context, canvas, compareRun.value, '#ef4444', xMax, yMax, left, top, width, height)
+  const xMax = Math.ceil(maxT)
+  const maxV = Math.max(...values, maxDefault)
+  const minV = Math.min(...values, minDefault)
+  const yMax = Math.max(maxDefault, maxV)
+  const yMin = Math.min(minDefault, minV)
+
+  drawCurveOnCanvas(context, primaryRun.value, colors.primary, xMax, yMin, yMax, left, top, width, height, valueKey)
+  drawCurveOnCanvas(context, compareRun.value, colors.compare, xMax, yMin, yMax, left, top, width, height, valueKey)
 
   context.fillStyle = '#6b7280'
   context.font = '11px sans-serif'
   context.fillText('时间(s)', left + width - 48, rect.height - 8)
-  context.fillText('车速(km/h)', 4, top + 10)
+  context.fillText(yLabel, 4, top + 10)
 
   context.fillStyle = '#111827'
   context.fillText('主曲线', left + 4, top + 14)
-  context.fillStyle = '#2563eb'
+  context.fillStyle = colors.primary
   context.fillRect(left + 42, top + 7, 18, 3)
 
   if (compareRun.value) {
     context.fillStyle = '#111827'
     context.fillText('对比', left + 70, top + 14)
-    context.fillStyle = '#ef4444'
+    context.fillStyle = colors.compare
     context.fillRect(left + 98, top + 7, 18, 3)
   }
+}
+
+function drawAccelerationChart() {
+  drawChart({
+    canvas: chartCanvas.value,
+    valueKey: 'speed',
+    yLabel: '车速(km/h)',
+    colors: { primary: '#2563eb', compare: '#ef4444' },
+    minDefault: 0,
+    maxDefault: 100,
+  })
+}
+
+function drawGChart() {
+  drawChart({
+    canvas: gChartCanvas.value,
+    valueKey: 'g',
+    yLabel: 'G值(g)',
+    colors: { primary: '#16a34a', compare: '#dc2626' },
+    minDefault: -1,
+    maxDefault: 1,
+  })
 }
 
 function exportChartImage() {
@@ -484,6 +559,16 @@ function exportChartImage() {
   const anchor = document.createElement('a')
   anchor.href = url
   anchor.download = `accel-curve-${Date.now()}.png`
+  anchor.click()
+}
+
+function exportGChartImage() {
+  const canvas = gChartCanvas.value
+  if (!canvas) return
+  const url = canvas.toDataURL('image/png')
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `g-curve-${Date.now()}.png`
   anchor.click()
 }
 
@@ -532,6 +617,7 @@ function connectTelemetrySocket() {
 function handleResize() {
   if (activeView.value === 'accelTest') {
     drawAccelerationChart()
+    drawGChart()
   }
 }
 
@@ -548,6 +634,7 @@ watch(
     if (activeView.value === 'accelTest') {
       await nextTick()
       drawAccelerationChart()
+      drawGChart()
     }
   },
 )
@@ -566,6 +653,21 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="app-shell">
+    <nav class="side-nav card" :class="{ collapsed: navCollapsed }">
+      <button class="nav-toggle" @click="navCollapsed = !navCollapsed">
+        {{ navCollapsed ? '展开' : '收起' }}
+      </button>
+      <button
+        v-for="item in navItems"
+        :key="item.key"
+        class="nav-btn"
+        :class="{ active: activeView === item.key }"
+        @click="activeView = item.key"
+      >
+        {{ navCollapsed ? item.label.slice(0, 2) : item.label }}
+      </button>
+    </nav>
+
     <section class="content">
       <template v-if="activeView === 'overview'">
         <header class="header card">
@@ -619,6 +721,14 @@ onBeforeUnmount(() => {
                 </div>
               </article>
 
+              <article class="middle-info-card">
+                <div v-if="handBrakeEngaged" class="handbrake-light">手刹</div>
+                <div class="gear-box">
+                  <span>档位</span>
+                  <strong>{{ dashboardGear }}</strong>
+                </div>
+              </article>
+
               <article class="gauge-card">
                 <h3>转速</h3>
                 <div class="gauge" :style="rpmGaugeStyle">
@@ -643,25 +753,30 @@ onBeforeUnmount(() => {
         <section class="card dash-lower" :style="dashLowerStyle">
 
           <div class="steer-section">
-            <span>转向状态</span>
-            <div class="steer-track">
-              <div class="steer-center"></div>
-              <div
-                class="steer-fill"
-                :style="{
-                  left: steerPercent < 0 ? `${50 + steerPercent / 2}%` : '50%',
-                  width: `${Math.abs(steerPercent) / 2}%`,
-                }"
-              ></div>
+            <div class="steer-row">
+              <strong class="steer-value">{{ toNumber(steerLeftPercent, 0) }}%</strong>
+              <div class="steer-track">
+                <div class="steer-center"></div>
+                <div
+                  class="steer-fill"
+                  :style="{
+                    left: steerPercent < 0 ? `${50 + steerPercent / 2}%` : '50%',
+                    width: `${Math.abs(steerPercent) / 2}%`,
+                  }"
+                ></div>
+              </div>
+              <strong class="steer-value">{{ toNumber(steerRightPercent, 0) }}%</strong>
             </div>
-            <strong>{{ toNumber(steerPercent, 0) }}%</strong>
           </div>
         </section>
       </section>
 
-      <section v-else class="accel-page">
+      <section v-else class="accel-page card" :style="accelPageStyle">
         <section class="card">
           <p class="tips">点击开始测试或弹射起步以开始测试</p>
+          <p class="tips">G值（Z轴加速度）：{{ toNumber(zGValue, 3) }} g</p>
+          <p class="tips">最大加速G值：{{ toNumber(gExtremes.maxAccelG, 3) }} g</p>
+          <p class="tips">最大减速G值：{{ toNumber(maxDecelGAbs, 3) }} g</p>
         </section>
 
         <section class="card accel-actions">
@@ -669,6 +784,7 @@ onBeforeUnmount(() => {
           <button class="action-btn" @click="stopAndSaveTest" :disabled="!testRunning">停止并保存</button>
           <button class="action-btn" @click="resetCurrentTest">清空当前</button>
           <button class="action-btn" @click="exportChartImage" :disabled="!primaryRun">保存曲线图片</button>
+          <button class="action-btn" @click="exportGChartImage" :disabled="!primaryRun">保存G值图片</button>
           <button class="action-btn" @click="exportCurrentRunTxt" :disabled="!latestRun">导出TXT原始数据</button>
           <label class="action-btn file-btn">
             加载TXT
@@ -691,6 +807,11 @@ onBeforeUnmount(() => {
           <canvas ref="chartCanvas" class="chart-canvas"></canvas>
         </section>
 
+        <section class="card chart-card">
+          <h3>G值曲线（时间-Z轴G值）</h3>
+          <canvas ref="gChartCanvas" class="chart-canvas"></canvas>
+        </section>
+
         <section class="card">
           <h3>历史测试（本地存储）</h3>
           <div class="history-list" v-if="savedRuns.length">
@@ -709,18 +830,6 @@ onBeforeUnmount(() => {
         </section>
       </section>
     </section>
-
-    <nav class="bottom-nav card">
-      <button
-        v-for="item in navItems"
-        :key="item.key"
-        class="nav-btn"
-        :class="{ active: activeView === item.key }"
-        @click="activeView = item.key"
-      >
-        {{ item.label }}
-      </button>
-    </nav>
 
     <div v-if="isGamePaused" class="modal-mask">
       <div class="modal-card">

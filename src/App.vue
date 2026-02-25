@@ -127,30 +127,6 @@ const dashLowerStyle = computed(() => ({ backgroundColor: zoneColor(aiBrakeRatio
 const speedGaugeStyle = computed(() => getGaugeStyle(speedKmhValue.value, 420, '#2563eb'))
 const rpmGaugeStyle = computed(() => getGaugeStyle(rpmValue.value, rpmMax.value, zoneColor(rpmRatio.value)))
 
-const dashLeftInfo = computed(() => {
-  const data = telemetry.value
-  if (!data) return []
-  return [
-    data.carClass ?? '--',
-    data.carPerformanceIndex ?? '--',
-    data.drivetrainType || '--',
-    data.numCylinders === 0 ? '纯电动' : (data.numCylinders ?? '--'),
-  ]
-})
-
-const dashRightInfo = computed(() => {
-  const data = telemetry.value
-  if (!data) return []
-  return [
-    data.isRaceOn === 1 ? '是' : '否',
-    data.lapNumber ?? '--',
-    data.racePosition ?? '--',
-    `${toNumber(data.bestLap, 3)} s`,
-    `${toNumber(data.lastLap, 3)} s`,
-    `${toNumber(data.currentLap, 3)} s`,
-  ]
-})
-
 const testRunning = ref(false)
 const testAutoArmed = ref(true)
 const testStartMs = ref(0)
@@ -161,6 +137,11 @@ const latestRun = ref(null)
 const savedRuns = ref([])
 const selectedCompareId = ref('')
 const importedRun = ref(null)
+
+const activeMetricSamples = computed(() => {
+  if (testRunning.value) return testSamples.value
+  return latestRun.value?.samples || []
+})
 
 const primaryRun = computed(() => {
   if (testRunning.value) {
@@ -203,6 +184,7 @@ const compareRun = computed(() => {
 
 const accelMetrics = computed(() => {
   const m = testRunning.value ? testMilestones.value : (latestRun.value?.milestones || createMilestones())
+  const decel = computeDecelMilestones(activeMetricSamples.value)
   return [
     { label: '0-100 km/h', value: formatSec(m.to100) },
     { label: '0-200 km/h', value: formatSec(m.to200) },
@@ -211,6 +193,13 @@ const accelMetrics = computed(() => {
     { label: '100-200 km/h', value: formatSec(segmentTime(m.to100, m.to200)) },
     { label: '200-300 km/h', value: formatSec(segmentTime(m.to200, m.to300)) },
     { label: '300-400 km/h', value: formatSec(segmentTime(m.to300, m.to400)) },
+    { label: '100-0 km/h', value: formatSec(segmentTime(decel.from100, decel.to0)) },
+    { label: '200-100 km/h(减速)', value: formatSec(segmentTime(decel.from200, decel.from100)) },
+    { label: '300-200 km/h(减速)', value: formatSec(segmentTime(decel.from300, decel.from200)) },
+    { label: '400-300 km/h(减速)', value: formatSec(segmentTime(decel.from400, decel.from300)) },
+    { label: '200-0 km/h', value: formatSec(segmentTime(decel.from200, decel.to0)) },
+    { label: '300-0 km/h', value: formatSec(segmentTime(decel.from300, decel.to0)) },
+    { label: '400-0 km/h', value: formatSec(segmentTime(decel.from400, decel.to0)) },
   ]
 })
 
@@ -221,6 +210,36 @@ function createMilestones() {
     to300: null,
     to400: null,
   }
+}
+
+function computeDecelMilestones(samples) {
+  const result = {
+    from400: null,
+    from300: null,
+    from200: null,
+    from100: null,
+    to0: null,
+  }
+  if (!Array.isArray(samples) || samples.length < 2) return result
+
+  let peakIndex = 0
+  for (let index = 1; index < samples.length; index += 1) {
+    if ((samples[index].speed || 0) > (samples[peakIndex].speed || 0)) {
+      peakIndex = index
+    }
+  }
+
+  for (let index = peakIndex; index < samples.length; index += 1) {
+    const speed = Number(samples[index].speed || 0)
+    const time = Number(samples[index].t || 0)
+    if (result.from400 === null && speed <= 400 && (samples[peakIndex].speed || 0) >= 400) result.from400 = time
+    if (result.from300 === null && speed <= 300 && (samples[peakIndex].speed || 0) >= 300) result.from300 = time
+    if (result.from200 === null && speed <= 200 && (samples[peakIndex].speed || 0) >= 200) result.from200 = time
+    if (result.from100 === null && speed <= 100 && (samples[peakIndex].speed || 0) >= 100) result.from100 = time
+    if (result.to0 === null && speed <= 1) result.to0 = time
+  }
+
+  return result
 }
 
 function zoneColor(ratio) {
@@ -298,7 +317,8 @@ function recordAccelerationSample(data) {
     testSamples.value.push({ t: elapsedSec, speed })
   }
   const reached400 = maybeMarkMilestones(speed, elapsedSec)
-  if (reached400) {
+  const backToZeroAfter100 = testMilestones.value.to100 !== null && speed <= 1 && elapsedSec > testMilestones.value.to100 + 0.2
+  if (reached400 || backToZeroAfter100) {
     stopAndSaveTest()
   }
 }
@@ -579,21 +599,6 @@ onBeforeUnmount(() => {
 
       <section v-else-if="activeView === 'dashboard'" class="dash-page">
         <section class="card dash-upper" :style="dashUpperStyle">
-          <div class="dash-top-grid">
-            <div class="mini-grid">
-              <div class="mini-kv" v-for="(item, index) in dashLeftInfo" :key="index">
-                <strong>{{ item }}</strong>
-              </div>
-            </div>
-            <div class="mini-grid">
-              <div class="mini-kv" v-for="(item, index) in dashRightInfo" :key="index">
-                <strong>{{ item }}</strong>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section class="card dash-lower" :style="dashLowerStyle">
           <div class="center-row">
             <div class="pedal-card">
               <span>刹车</span>
@@ -633,6 +638,9 @@ onBeforeUnmount(() => {
               <strong>{{ toNumber(accelPercent, 0) }}%</strong>
             </div>
           </div>
+        </section>
+
+        <section class="card dash-lower" :style="dashLowerStyle">
 
           <div class="steer-section">
             <span>转向状态</span>
@@ -652,6 +660,10 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else class="accel-page">
+        <section class="card">
+          <p class="tips">点击开始测试或弹射起步以开始测试</p>
+        </section>
+
         <section class="card accel-actions">
           <button class="action-btn primary" @click="startAccelerationTest" :disabled="testRunning">开始测试</button>
           <button class="action-btn" @click="stopAndSaveTest" :disabled="!testRunning">停止并保存</button>

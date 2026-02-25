@@ -147,31 +147,6 @@ body {
   gap: 8px;
 }
 
-.dash-top-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.mini-grid {
-  display: grid;
-  gap: 6px;
-}
-
-.mini-kv {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.65);
-  border: 1px solid #f3f4f6;
-}
-
-.mini-kv strong {
-  font-size: 13px;
-}
-
 .center-row {
   display: grid;
   grid-template-columns: 90px minmax(0, 1fr) 90px;
@@ -460,10 +435,6 @@ body {
     padding: 8px 10px;
   }
 
-  .dash-top-grid {
-    grid-template-columns: 1fr;
-  }
-
   .accel-actions {
     flex-direction: column;
   }
@@ -508,5 +479,25 @@ body {
   .history-item {
     flex-direction: column;
     align-items: flex-start;
+  }
+}
+
+@media (max-width: 900px) and (orientation: landscape) {
+  .center-row {
+    grid-template-columns: 70px minmax(0, 1fr) 70px;
+  }
+
+  .gauge-wrap {
+    grid-template-columns: repeat(2, minmax(160px, 1fr));
+  }
+
+  .pedal-track {
+    width: 18px;
+    height: 120px;
+  }
+
+  .pedal-fill {
+    width: 100% !important;
+    height: auto !important;
   }
 }

@@ -164,6 +164,7 @@ const manualStartArmed = ref(false)
 const manualCountdownStartMs = ref(null)
 const manualCountdownElapsedMs = ref(0)
 const launchModeActive = ref(false)
+const launchModeEnabled = ref(true)
 const launchStarted = ref(false)
 const launchStartMs = ref(0)
 const launchElapsedSec = ref(0)
@@ -563,6 +564,13 @@ async function toggleFullscreen() {
   }
 }
 
+function toggleLaunchModeEnabled() {
+  launchModeEnabled.value = !launchModeEnabled.value
+  if (!launchModeEnabled.value) {
+    stopLaunchMode()
+  }
+}
+
 function createLaunchStars(count = 90) {
   return Array.from({ length: count }, (_, index) => {
     const size = (Math.random() * 2.1 + 0.7).toFixed(2)
@@ -583,15 +591,14 @@ function createLaunchStars(count = 90) {
   })
 }
 
-function createLaunchBurst(speedFactor = 1) {
+function createLaunchBurst() {
   const index = launchBurstIdSeed++
     const angle = (Math.random() * 360).toFixed(1)
     const length = (Math.random() * 320 + 150).toFixed(1)
     const travel = (Math.random() * 70 + 78).toFixed(1)
     const thickness = (Math.random() * 6.8 + 2.8).toFixed(2)
     const baseDuration = Math.random() * 1.6 + 1.2
-    const normalizedFactor = Math.max(0.1, speedFactor)
-    const duration = (baseDuration / normalizedFactor) * 3
+    const duration = baseDuration * 3
     const delay = (Math.random() * 1.4).toFixed(2)
     const startHue = Math.random() > 0.5 ? 'rgba(250, 204, 21, 0.92)' : 'rgba(245, 158, 11, 0.9)'
     const endHue = Math.random() > 0.45 ? 'rgba(239, 68, 68, 0.96)' : 'rgba(220, 38, 38, 0.94)'
@@ -613,13 +620,13 @@ function createLaunchBurst(speedFactor = 1) {
 }
 
 function createLaunchBursts(count = 56) {
-  return Array.from({ length: count }, () => createLaunchBurst(launchBurstSpeedFactor.value))
+  return Array.from({ length: count }, () => createLaunchBurst())
 }
 
 function emitLaunchBursts(count = 8) {
   const now = performance.now()
   const alive = launchBursts.value.filter((item) => item.expireAt > now)
-  const created = Array.from({ length: count }, () => createLaunchBurst(launchBurstSpeedFactor.value))
+  const created = Array.from({ length: count }, () => createLaunchBurst())
   const merged = [...alive, ...created]
   launchBursts.value = merged.length > MAX_LAUNCH_BURSTS
     ? merged.slice(merged.length - MAX_LAUNCH_BURSTS)
@@ -1315,7 +1322,7 @@ function connectTelemetrySocket() {
             dashEnterAccelCancelled.value = false
           }
 
-          const launchTrigger = speed <= 0.5 && handBrake >= 100 && accel >= 100 && brake < 100
+          const launchTrigger = launchModeEnabled.value && speed <= 0.5 && handBrake >= 100 && accel >= 100 && brake < 100
           if (launchTrigger && !launchModeActive.value) {
             startLaunchMode()
           }
@@ -1538,6 +1545,9 @@ onBeforeUnmount(() => {
       </button>
       <button class="nav-btn nav-fullscreen" @click="toggleFullscreen">
         {{ navCollapsed ? '全' : (isFullscreen ? '退出全屏' : '全屏') }}
+      </button>
+      <button class="nav-btn nav-launch-toggle" :class="{ off: !launchModeEnabled }" @click="toggleLaunchModeEnabled">
+        {{ navCollapsed ? (launchModeEnabled ? '弹开' : '弹关') : (launchModeEnabled ? '关闭弹射模式' : '开启弹射模式') }}
       </button>
     </nav>
     <div v-if="dashEnterAccelPromptVisible && activeView === 'dashboard' && !isGamePaused" class="modal-mask">

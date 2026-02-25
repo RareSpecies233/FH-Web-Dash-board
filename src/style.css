@@ -820,21 +820,13 @@ body {
   display: flex;
   align-items: stretch;
   justify-content: center;
-  gap: 0;
-  background: rgba(15, 23, 42, 0.45);
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  border-radius: 8px;
-  overflow: hidden;
+  gap: 2px;
 }
 
 .launch-metric {
-  min-width: 120px;
-  padding: 3px 10px;
+  min-width: 114px;
+  padding: 0 4px;
   text-align: center;
-}
-
-.launch-metric + .launch-metric {
-  border-left: 1px solid rgba(148, 163, 184, 0.28);
 }
 
 .launch-metric span {

@@ -166,8 +166,10 @@ const manualCountdownElapsedMs = ref(0)
 const launchModeActive = ref(false)
 const launchStarted = ref(false)
 const launchStartMs = ref(0)
+const launchElapsedSec = ref(0)
 const launchMilestones = ref(createMilestones())
 const launchZeroSinceMs = ref(null)
+const launchExitBrakeLatched = ref(false)
 const launchStars = ref([])
 const launchBursts = ref([])
 const dashModePromptVisible = ref(false)
@@ -311,10 +313,12 @@ const launchMetrics = computed(() => {
       { label: '0-300km/h', value: '【0-300km/h】' },
     ]
   }
+  const rollingTime = formatSec(launchElapsedSec.value)
+  const moving = speedKmhValue.value > 0.1
   return [
-    { label: '0-100km/h', value: m.to100 === null ? '--' : formatSec(m.to100) },
-    { label: '0-200km/h', value: m.to200 === null ? '--' : formatSec(m.to200) },
-    { label: '0-300km/h', value: m.to300 === null ? '--' : formatSec(m.to300) },
+    { label: '0-100km/h', value: m.to100 === null ? (moving ? rollingTime : '--') : formatSec(m.to100) },
+    { label: '0-200km/h', value: m.to200 === null ? (moving ? rollingTime : '--') : formatSec(m.to200) },
+    { label: '0-300km/h', value: m.to300 === null ? (moving ? rollingTime : '--') : formatSec(m.to300) },
   ]
 })
 
@@ -577,9 +581,9 @@ function createLaunchBursts(count = 34) {
   return Array.from({ length: count }, (_, index) => {
     const angle = (Math.random() * 360).toFixed(1)
     const length = (Math.random() * 320 + 150).toFixed(1)
-    const travel = (Math.random() * 380 + 180).toFixed(1)
+    const travel = (Math.random() * 300 + 150).toFixed(1)
     const thickness = (Math.random() * 6.8 + 2.8).toFixed(2)
-    const duration = (Math.random() * 1.1 + 0.22).toFixed(2)
+    const duration = (Math.random() * 1.1 + 0.5).toFixed(2)
     const delay = (Math.random() * 1.4).toFixed(2)
     const startHue = Math.random() > 0.5 ? 'rgba(250, 204, 21, 0.92)' : 'rgba(245, 158, 11, 0.9)'
     const endHue = Math.random() > 0.45 ? 'rgba(239, 68, 68, 0.96)' : 'rgba(220, 38, 38, 0.94)'
@@ -610,20 +614,22 @@ function scheduleLaunchBurstRefresh() {
   clearLaunchBurstTimer()
   const tick = () => {
     if (!launchModeActive.value) return
-    launchBursts.value = createLaunchBursts(40)
-    launchBurstTimer = setTimeout(tick, 140 + Math.random() * 260)
+    launchBursts.value = createLaunchBursts(56)
+    launchBurstTimer = setTimeout(tick, 220 + Math.random() * 320)
   }
-  launchBurstTimer = setTimeout(tick, 180)
+  launchBurstTimer = setTimeout(tick, 260)
 }
 
 function startLaunchMode() {
   launchModeActive.value = true
   launchStarted.value = false
   launchStartMs.value = 0
+  launchElapsedSec.value = 0
   launchMilestones.value = createMilestones()
   launchZeroSinceMs.value = null
+  launchExitBrakeLatched.value = false
   launchStars.value = createLaunchStars()
-  launchBursts.value = createLaunchBursts(40)
+  launchBursts.value = createLaunchBursts(56)
   scheduleLaunchBurstRefresh()
 }
 
@@ -631,8 +637,10 @@ function stopLaunchMode() {
   launchModeActive.value = false
   launchStarted.value = false
   launchStartMs.value = 0
+  launchElapsedSec.value = 0
   launchMilestones.value = createMilestones()
   launchZeroSinceMs.value = null
+  launchExitBrakeLatched.value = false
   clearLaunchBurstTimer()
 }
 
@@ -642,12 +650,14 @@ function recordLaunchProgress(speed, handBrake) {
     if (handBrake < 100) {
       launchStarted.value = true
       launchStartMs.value = now
+      launchElapsedSec.value = 0
       launchMilestones.value = createMilestones()
     }
     return
   }
 
   const elapsedSec = (now - launchStartMs.value) / 1000
+  launchElapsedSec.value = elapsedSec
   const marks = launchMilestones.value
   if (marks.to100 === null && speed >= 100) marks.to100 = elapsedSec
   if (marks.to200 === null && speed >= 200) marks.to200 = elapsedSec
@@ -1284,7 +1294,8 @@ function connectTelemetrySocket() {
           }
 
           if (launchModeActive.value) {
-            if (brake >= 100) {
+            if (brake >= 100) launchExitBrakeLatched.value = true
+            if (launchExitBrakeLatched.value && brake <= 0) {
               stopLaunchMode()
             } else {
               recordLaunchProgress(speed, handBrake)

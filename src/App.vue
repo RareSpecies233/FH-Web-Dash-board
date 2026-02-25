@@ -13,6 +13,7 @@ const navCollapsed = ref(true)
 const connectionStatus = ref('未连接')
 const lastUpdated = ref('-')
 const telemetry = ref(null)
+const pauseIgnored = ref(false)
 const chartCanvas = ref(null)
 const gChartCanvas = ref(null)
 const powerChartCanvas = ref(null)
@@ -141,15 +142,10 @@ const dashboardGear = computed(() => {
 const handBrakeEngaged = computed(() => Number(telemetry.value?.handBrake || 0) >= 1)
 
 const rpmRatio = computed(() => Math.max(0, Math.min(1, rpmValue.value / Math.max(1, rpmMax.value))))
-const aiBrakeRatio = computed(() => {
-  const raw = Number(telemetry.value?.normalizedAiBrakeDifference || 0)
-  return Math.max(0, Math.min(1, Math.abs(raw) / 127))
-})
 
 const dashUpperStyle = computed(() => ({ backgroundColor: zoneColor(rpmRatio.value) }))
-const dashLowerStyle = computed(() => ({ backgroundColor: zoneColor(aiBrakeRatio.value) }))
 
-const speedGaugeStyle = computed(() => getGaugeStyle(speedKmhValue.value, 420, '#2563eb'))
+const speedGaugeStyle = computed(() => getGaugeStyle(speedKmhValue.value, 500, '#2563eb'))
 const rpmGaugeStyle = computed(() => getGaugeStyle(rpmValue.value, rpmMax.value, zoneColor(rpmRatio.value)))
 const accelPageStyle = computed(() => ({ backgroundColor: testRunning.value ? zoneColor(rpmRatio.value) : '#ffffff' }))
 const zGValue = computed(() => {
@@ -163,6 +159,18 @@ const testStartMs = ref(0)
 const zeroSpeedSinceMs = ref(null)
 const disableRealtimeDrawing = ref(false)
 const testEndNoticeVisible = ref(false)
+const manualStartPromptVisible = ref(false)
+const manualStartArmed = ref(false)
+const manualCountdownStartMs = ref(null)
+const manualCountdownElapsedMs = ref(0)
+const dashToAccelPromptVisible = ref(false)
+const dashToAccelCancelled = ref(false)
+const dashSteerLeftProgress = ref(0)
+const dashSteerRightProgress = ref(0)
+const dashModePromptVisible = ref(false)
+const dashModeCancelled = ref(false)
+const dashModeHoldStartMs = ref(null)
+const dashModeHoldProgress = ref(0)
 const testSamples = ref([])
 const runningSummary = ref(createEmptySummary())
 const testMilestones = ref(createMilestones())
@@ -172,12 +180,14 @@ const latestRun = ref(null)
 const savedRuns = ref([])
 const selectedCompareId = ref('')
 const selectedHistoryRunId = ref('')
+const historyDetailRunId = ref('')
 const importedRun = ref(null)
 const accelRenderSerial = ref(0)
 const chartHover = ref({})
 const chartMeta = ref({})
 let testEndNoticeTimer = null
 let lastAccelRenderAtMs = 0
+let manualStartTimer = null
 
 const activeSummary = computed(() => {
   if (testRunning.value) return runningSummary.value
@@ -228,6 +238,47 @@ const selectedHistoryRun = computed(() => {
   if (!savedRuns.value.length) return null
   const found = savedRuns.value.find((item) => item.id === selectedHistoryRunId.value)
   return found || savedRuns.value[0]
+})
+
+const historyDetailRun = computed(() => {
+  if (!historyDetailRunId.value) return null
+  return savedRuns.value.find((item) => item.id === historyDetailRunId.value) || null
+})
+
+const historyDetailMetrics = computed(() => {
+  const run = historyDetailRun.value
+  if (!run) return []
+  const summary = ensureRunSummary(run)
+  const m = run.milestones || createMilestones()
+  return [
+    { label: '实时速度', value: '--' },
+    { label: '当前G值', value: '--' },
+    { label: '最大功率', value: `${toNumber(summary.maxPowerKw, 1)} kW` },
+    { label: '最大马力', value: `${toNumber(summary.maxHp, 1)} HP` },
+    { label: '最大扭矩', value: `${toNumber(summary.maxTorqueNm, 1)} Nm` },
+    { label: '最大加速G值', value: `${toNumber(summary.maxAccelG, 3)} g` },
+    { label: '最大减速G值', value: `${toNumber(summary.maxDecelGAbs, 3)} g` },
+    { label: '0-100 km/h', value: formatSec(m.to100) },
+    { label: '0-200 km/h', value: formatSec(m.to200) },
+    { label: '0-300 km/h', value: formatSec(m.to300) },
+    { label: '0-400 km/h', value: formatSec(m.to400) },
+    { label: '100-200 km/h', value: formatSec(segmentTime(m.to100, m.to200)) },
+    { label: '200-300 km/h', value: formatSec(segmentTime(m.to200, m.to300)) },
+    { label: '300-400 km/h', value: formatSec(segmentTime(m.to300, m.to400)) },
+    { label: '100-0 km/h', value: formatSec(segmentTime(summary.decel.from100, summary.decel.to0)) },
+    { label: '200-100 km/h(减速)', value: formatSec(segmentTime(summary.decel.from200, summary.decel.from100)) },
+    { label: '300-200 km/h(减速)', value: formatSec(segmentTime(summary.decel.from300, summary.decel.from200)) },
+    { label: '400-300 km/h(减速)', value: formatSec(segmentTime(summary.decel.from400, summary.decel.from300)) },
+    { label: '200-0 km/h', value: formatSec(segmentTime(summary.decel.from200, summary.decel.to0)) },
+    { label: '300-0 km/h', value: formatSec(segmentTime(summary.decel.from300, summary.decel.to0)) },
+    { label: '400-0 km/h', value: formatSec(segmentTime(summary.decel.from400, summary.decel.to0)) },
+  ]
+})
+
+const manualWaitingForStill = computed(() => manualStartArmed.value && manualCountdownStartMs.value === null)
+const manualStartProgress = computed(() => {
+  if (!manualStartArmed.value || manualCountdownStartMs.value === null) return 0
+  return Math.max(0, Math.min(100, (manualCountdownElapsedMs.value / 30000) * 100))
 })
 
 const accelMetrics = computed(() => {
@@ -411,8 +462,47 @@ function formatValue(item) {
   return item.unit ? `${displayValue} ${item.unit}` : `${displayValue}`
 }
 
+function clearManualStartTimer() {
+  if (manualStartTimer) {
+    clearTimeout(manualStartTimer)
+    manualStartTimer = null
+  }
+}
+
+function startManualCountdown() {
+  if (manualCountdownStartMs.value !== null) return
+  manualCountdownStartMs.value = performance.now()
+  manualCountdownElapsedMs.value = 0
+  clearManualStartTimer()
+  manualStartTimer = setTimeout(() => {
+    cancelManualStart()
+  }, 30000)
+}
+
+function requestManualStart() {
+  if (testRunning.value) return
+  manualStartPromptVisible.value = true
+  manualStartArmed.value = true
+  manualCountdownStartMs.value = null
+  manualCountdownElapsedMs.value = 0
+  clearManualStartTimer()
+}
+
+function cancelManualStart() {
+  manualStartPromptVisible.value = false
+  manualStartArmed.value = false
+  manualCountdownStartMs.value = null
+  manualCountdownElapsedMs.value = 0
+  clearManualStartTimer()
+}
+
+function ignorePauseModal() {
+  pauseIgnored.value = true
+}
+
 function startAccelerationTest() {
   if (testRunning.value) return
+  cancelManualStart()
   testRunning.value = true
   testStartMs.value = performance.now()
   lastAccelRenderAtMs = 0
@@ -439,11 +529,7 @@ function maybeMarkMilestones(speed, elapsedSec) {
   if (marks.to100 === null && speed >= 100) marks.to100 = elapsedSec
   if (marks.to200 === null && speed >= 200) marks.to200 = elapsedSec
   if (marks.to300 === null && speed >= 300) marks.to300 = elapsedSec
-  if (marks.to400 === null && speed >= 400) {
-    marks.to400 = elapsedSec
-    return true
-  }
-  return false
+  if (marks.to400 === null && speed >= 400) marks.to400 = elapsedSec
 }
 
 function recordAccelerationSample(data) {
@@ -483,7 +569,7 @@ function recordAccelerationSample(data) {
       ? torqueNm
       : Math.max(runningSummary.value.maxTorqueNm, torqueNm)
   }
-  const reached400 = maybeMarkMilestones(speed, elapsedSec)
+  maybeMarkMilestones(speed, elapsedSec)
   if (speed <= 0.5) {
     if (zeroSpeedSinceMs.value === null) zeroSpeedSinceMs.value = now
   } else {
@@ -491,7 +577,7 @@ function recordAccelerationSample(data) {
   }
 
   const stayedZeroFor250ms = zeroSpeedSinceMs.value !== null && now - zeroSpeedSinceMs.value >= 250
-  if (reached400 || stayedZeroFor250ms) {
+  if (stayedZeroFor250ms) {
     stopAndSaveTest()
   }
 }
@@ -557,6 +643,7 @@ function showTestEndedNotice() {
 function resetCurrentTest() {
   testRunning.value = false
   zeroSpeedSinceMs.value = null
+  cancelManualStart()
   testSamples.value = []
   runningSummary.value = createEmptySummary()
   testMilestones.value = createMilestones()
@@ -583,6 +670,9 @@ function deleteSavedRun(runId) {
   if (selectedHistoryRunId.value === runId) {
     selectedHistoryRunId.value = savedRuns.value[0]?.id || ''
   }
+  if (historyDetailRunId.value === runId) {
+    historyDetailRunId.value = ''
+  }
   saveRunsToStorage()
 }
 
@@ -590,6 +680,7 @@ function clearAllSavedRuns() {
   savedRuns.value = []
   selectedCompareId.value = ''
   selectedHistoryRunId.value = ''
+  historyDetailRunId.value = ''
   if (!testRunning.value) latestRun.value = null
   saveRunsToStorage()
 }
@@ -756,7 +847,7 @@ function drawChart({ canvas, chartKey, valueKey, yLabel, colors, minDefault, max
 
 function drawHistoryChart({ canvas, valueKey, yLabel, colors, minDefault, maxDefault }) {
   if (!canvas) return
-  const run = selectedHistoryRun.value
+  const run = historyDetailRun.value
   if (!run || !Array.isArray(run.samples) || run.samples.length < 2) return
 
   const rect = canvas.getBoundingClientRect()
@@ -974,10 +1065,83 @@ function connectTelemetrySocket() {
       if (payload.type === 'telemetry') {
         telemetry.value = payload.data
         lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+        if (!isGamePaused.value) {
+          pauseIgnored.value = false
+        }
 
-        const autoCondition = (payload.data.handBrake ?? 0) >= 100 && (payload.data.accel ?? 0) >= 100
+        const speed = Number(payload.data.speedKmh || 0)
+        const handBrake = Number(payload.data.handBrake || 0)
+        const accel = Number(payload.data.accel || 0)
+        const brake = Number(payload.data.brake || 0)
 
-        if (activeView.value === 'accelTest' && !testRunning.value) {
+        if (activeView.value === 'dashboard') {
+          const dashTrigger = handBrake >= 100 && accel >= 100
+          if (dashTrigger && !dashToAccelCancelled.value && !dashToAccelPromptVisible.value) {
+            dashToAccelPromptVisible.value = true
+            dashSteerLeftProgress.value = 0
+            dashSteerRightProgress.value = 0
+          }
+          if (!dashTrigger) {
+            dashToAccelCancelled.value = false
+            dashToAccelPromptVisible.value = false
+            dashSteerLeftProgress.value = 0
+            dashSteerRightProgress.value = 0
+          }
+          if (dashToAccelPromptVisible.value) {
+            const steer = Math.max(-100, Math.min(100, Number(payload.data.steerPercent || 0)))
+            if (steer < 0) dashSteerLeftProgress.value = Math.max(dashSteerLeftProgress.value, Math.abs(steer))
+            if (steer > 0) dashSteerRightProgress.value = Math.max(dashSteerRightProgress.value, steer)
+            if (dashSteerLeftProgress.value >= 50 && dashSteerRightProgress.value >= 50) {
+              dashToAccelPromptVisible.value = false
+              activeView.value = 'accelTest'
+              startAccelerationTest()
+            }
+          }
+        }
+
+        if (activeView.value === 'accelTest') {
+          const dashModeTrigger = handBrake >= 100 && brake >= 100
+          if (dashModeTrigger && !dashModeCancelled.value && !dashModePromptVisible.value) {
+            dashModePromptVisible.value = true
+            dashModeHoldStartMs.value = performance.now()
+            dashModeHoldProgress.value = 0
+          }
+          if (dashModePromptVisible.value) {
+            if (!dashModeTrigger) {
+              dashModePromptVisible.value = false
+              dashModeHoldStartMs.value = null
+              dashModeHoldProgress.value = 0
+              dashModeCancelled.value = false
+            } else {
+              const elapsed = performance.now() - (dashModeHoldStartMs.value || performance.now())
+              dashModeHoldProgress.value = Math.max(0, Math.min(100, (elapsed / 5000) * 100))
+              if (dashModeHoldProgress.value >= 100) {
+                dashModePromptVisible.value = false
+                dashModeHoldStartMs.value = null
+                dashModeHoldProgress.value = 0
+                dashModeCancelled.value = false
+                activeView.value = 'dashboard'
+              }
+            }
+          }
+        }
+
+        if (activeView.value === 'accelTest' && manualStartArmed.value && !testRunning.value) {
+          if (manualCountdownStartMs.value === null) {
+            if (speed <= 0.5) {
+              startManualCountdown()
+            }
+          } else {
+            manualCountdownElapsedMs.value = performance.now() - manualCountdownStartMs.value
+            if (speed > 0.5) {
+              startAccelerationTest()
+            }
+          }
+        }
+
+        const autoCondition = handBrake >= 100 && accel >= 100
+
+        if (activeView.value === 'accelTest' && !testRunning.value && !manualStartArmed.value) {
           if (autoCondition && testAutoArmed.value && !launchPromptVisible.value) {
             launchPromptVisible.value = true
           }
@@ -1054,7 +1218,7 @@ watch(
     testRunning.value,
     latestRun.value?.id,
     selectedCompareId.value,
-    selectedHistoryRunId.value,
+    historyDetailRunId.value,
     savedRuns.value.length,
     importedRun.value?.id,
   ],
@@ -1062,6 +1226,17 @@ watch(
     if (activeView.value !== 'accelTest') {
       launchPromptVisible.value = false
       testAutoArmed.value = true
+      cancelManualStart()
+      dashModePromptVisible.value = false
+      dashModeCancelled.value = false
+      dashModeHoldStartMs.value = null
+      dashModeHoldProgress.value = 0
+    }
+    if (activeView.value !== 'dashboard') {
+      dashToAccelPromptVisible.value = false
+      dashToAccelCancelled.value = false
+      dashSteerLeftProgress.value = 0
+      dashSteerRightProgress.value = 0
     }
     if (activeView.value === 'accelTest') {
       if (disableRealtimeDrawing.value && testRunning.value) return
@@ -1072,15 +1247,20 @@ watch(
       drawTorqueChart()
     }
     if (activeView.value === 'history') {
-      if (!selectedHistoryRunId.value && savedRuns.value.length) {
-        selectedHistoryRunId.value = savedRuns.value[0].id
-      }
+      if (!historyDetailRunId.value) return
       await nextTick()
       drawHistoryAccelerationChart()
       drawHistoryGChart()
       drawHistoryPowerChart()
       drawHistoryTorqueChart()
     }
+  },
+)
+
+watch(
+  () => isGamePaused.value,
+  (paused) => {
+    if (!paused) pauseIgnored.value = false
   },
 )
 
@@ -1093,6 +1273,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   ws?.close()
   if (testEndNoticeTimer) clearTimeout(testEndNoticeTimer)
+  clearManualStartTimer()
+  dashModeHoldStartMs.value = null
   window.removeEventListener('resize', handleResize)
 })
 </script>
@@ -1199,10 +1381,6 @@ onBeforeUnmount(() => {
               <strong>{{ toNumber(accelPercent, 0) }}%</strong>
             </div>
           </div>
-        </section>
-
-        <section class="card dash-lower" :style="dashLowerStyle">
-
           <div class="steer-section">
             <div class="steer-row">
               <strong class="steer-value">{{ toNumber(steerLeftPercent, 0) }}%</strong>
@@ -1224,7 +1402,7 @@ onBeforeUnmount(() => {
 
       <section v-else-if="activeView === 'accelTest'" class="accel-page" :style="accelPageStyle">
         <div class="accel-actions">
-          <button class="action-btn small-btn primary" @click="startAccelerationTest" :disabled="testRunning">开始测试</button>
+          <button class="action-btn small-btn primary" @click="requestManualStart" :disabled="testRunning || manualStartArmed">开始测试</button>
           <button class="action-btn small-btn" @click="stopAndSaveTest" :disabled="!testRunning">停止测试</button>
           <button class="action-btn small-btn" @click="resetCurrentTest">清空当前</button>
           <button class="action-btn small-btn" @click="exportCurrentRunTxt" :disabled="!latestRun">导出TXT原始数据</button>
@@ -1305,7 +1483,7 @@ onBeforeUnmount(() => {
             :class="{ active: selectedHistoryRunId === run.id }"
             v-for="run in savedRuns"
             :key="run.id"
-            @click="selectedHistoryRunId = run.id"
+            @click="selectedHistoryRunId = run.id; historyDetailRunId = run.id"
           >
             <div>
               <strong>{{ run.carName }}</strong>
@@ -1319,48 +1497,61 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <p v-else class="tips">暂无测试记录，开始一次测试后会自动保存到本地。</p>
-
-        <section v-if="selectedHistoryRun" class="charts-row">
-          <section class="chart-card chart-panel">
-            <header class="chart-title-row"><h3>历史加速曲线（时间-车速）</h3></header>
-            <div class="chart-wrap" @mousemove="updateChartHover('history-speed', $event)" @mouseleave="clearChartHover('history-speed')">
-              <canvas ref="historyChartCanvas" class="chart-canvas"></canvas>
-              <div v-if="chartHover['history-speed']" class="chart-tooltip" :style="{ left: chartHover['history-speed'].left, top: chartHover['history-speed'].top }">{{ chartHover['history-speed'].text }}</div>
-            </div>
-          </section>
-
-          <section class="chart-card chart-panel">
-            <header class="chart-title-row"><h3>历史G值曲线（时间-Z轴G值）</h3></header>
-            <div class="chart-wrap" @mousemove="updateChartHover('history-g', $event)" @mouseleave="clearChartHover('history-g')">
-              <canvas ref="historyGChartCanvas" class="chart-canvas"></canvas>
-              <div v-if="chartHover['history-g']" class="chart-tooltip" :style="{ left: chartHover['history-g'].left, top: chartHover['history-g'].top }">{{ chartHover['history-g'].text }}</div>
-            </div>
-          </section>
-        </section>
-
-        <section v-if="selectedHistoryRun" class="charts-row">
-          <section class="chart-card chart-panel">
-            <header class="chart-title-row"><h3>历史功率曲线（时间-kW）</h3></header>
-            <div class="chart-wrap" @mousemove="updateChartHover('history-powerKw', $event)" @mouseleave="clearChartHover('history-powerKw')">
-              <canvas ref="historyPowerChartCanvas" class="chart-canvas"></canvas>
-              <div v-if="chartHover['history-powerKw']" class="chart-tooltip" :style="{ left: chartHover['history-powerKw'].left, top: chartHover['history-powerKw'].top }">{{ chartHover['history-powerKw'].text }}</div>
-            </div>
-          </section>
-
-          <section class="chart-card chart-panel">
-            <header class="chart-title-row"><h3>历史扭矩曲线（时间-Nm）</h3></header>
-            <div class="chart-wrap" @mousemove="updateChartHover('history-torqueNm', $event)" @mouseleave="clearChartHover('history-torqueNm')">
-              <canvas ref="historyTorqueChartCanvas" class="chart-canvas"></canvas>
-              <div v-if="chartHover['history-torqueNm']" class="chart-tooltip" :style="{ left: chartHover['history-torqueNm'].left, top: chartHover['history-torqueNm'].top }">{{ chartHover['history-torqueNm'].text }}</div>
-            </div>
-          </section>
-        </section>
       </section>
     </section>
 
-    <div v-if="isGamePaused" class="modal-mask">
+    <div v-if="isGamePaused && !pauseIgnored" class="modal-mask">
       <div class="modal-card">
         <h3>游戏已暂停</h3>
+        <div class="modal-actions">
+          <button class="action-btn small-btn" @click="ignorePauseModal">忽略</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="manualStartPromptVisible && activeView === 'accelTest' && !isGamePaused" class="modal-mask">
+      <div class="modal-card">
+        <h3 v-if="manualWaitingForStill">请保持静止以开始</h3>
+        <template v-else>
+          <h3>请在30S内开始测试，如果30S内没有开始测试则自动取消测试</h3>
+          <div class="modal-progress-track">
+            <div class="modal-progress-fill" :style="{ width: `${manualStartProgress}%` }"></div>
+          </div>
+        </template>
+        <div class="modal-actions">
+          <button class="action-btn small-btn" @click="cancelManualStart">取消测试</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="dashToAccelPromptVisible && activeView === 'dashboard' && !isGamePaused" class="modal-mask">
+      <div class="modal-card">
+        <h3>左右转向以进行加速测试？</h3>
+        <div class="dual-progress">
+          <div class="progress-line">
+            <span>左转向</span>
+            <div class="modal-progress-track"><div class="modal-progress-fill" :style="{ width: `${dashSteerLeftProgress}%` }"></div></div>
+          </div>
+          <div class="progress-line">
+            <span>右转向</span>
+            <div class="modal-progress-track"><div class="modal-progress-fill" :style="{ width: `${dashSteerRightProgress}%` }"></div></div>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="action-btn small-btn" @click="dashToAccelPromptVisible = false; dashToAccelCancelled = true">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="dashModePromptVisible && activeView === 'accelTest' && !isGamePaused" class="modal-mask">
+      <div class="modal-card">
+        <h3>按住5秒以进入仪表模式</h3>
+        <div class="modal-progress-track">
+          <div class="modal-progress-fill" :style="{ width: `${dashModeHoldProgress}%` }"></div>
+        </div>
+        <div class="modal-actions">
+          <button class="action-btn small-btn" @click="dashModePromptVisible = false; dashModeCancelled = true; dashModeHoldStartMs = null; dashModeHoldProgress = 0">取消</button>
+        </div>
       </div>
     </div>
 
@@ -1378,6 +1569,58 @@ onBeforeUnmount(() => {
     <div v-if="testEndNoticeVisible" class="modal-mask">
       <div class="modal-card">
         <h3>已结束测试</h3>
+      </div>
+    </div>
+
+    <div v-if="historyDetailRun && activeView === 'history'" class="modal-mask" @click.self="historyDetailRunId = ''">
+      <div class="modal-card history-modal-card">
+        <div class="history-modal-actions">
+          <button class="action-btn small-btn" @click="deleteSavedRun(historyDetailRun.id)">删除此条</button>
+          <button class="action-btn small-btn" @click="exportRunTxt(historyDetailRun)">导出TXT原始数据</button>
+        </div>
+
+        <div class="metric-grid fixed-three-rows compact-metrics">
+          <div class="metric-item" v-for="item in historyDetailMetrics" :key="item.label">
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+          </div>
+        </div>
+
+        <section class="charts-row">
+          <section class="chart-card chart-panel">
+            <header class="chart-title-row"><h3>历史加速曲线（时间-车速）</h3></header>
+            <div class="chart-wrap" @mousemove="updateChartHover('history-speed', $event)" @mouseleave="clearChartHover('history-speed')">
+              <canvas ref="historyChartCanvas" class="chart-canvas"></canvas>
+              <div v-if="chartHover['history-speed']" class="chart-tooltip" :style="{ left: chartHover['history-speed'].left, top: chartHover['history-speed'].top }">{{ chartHover['history-speed'].text }}</div>
+            </div>
+          </section>
+
+          <section class="chart-card chart-panel">
+            <header class="chart-title-row"><h3>历史G值曲线（时间-Z轴G值）</h3></header>
+            <div class="chart-wrap" @mousemove="updateChartHover('history-g', $event)" @mouseleave="clearChartHover('history-g')">
+              <canvas ref="historyGChartCanvas" class="chart-canvas"></canvas>
+              <div v-if="chartHover['history-g']" class="chart-tooltip" :style="{ left: chartHover['history-g'].left, top: chartHover['history-g'].top }">{{ chartHover['history-g'].text }}</div>
+            </div>
+          </section>
+        </section>
+
+        <section class="charts-row">
+          <section class="chart-card chart-panel">
+            <header class="chart-title-row"><h3>历史功率曲线（时间-kW）</h3></header>
+            <div class="chart-wrap" @mousemove="updateChartHover('history-powerKw', $event)" @mouseleave="clearChartHover('history-powerKw')">
+              <canvas ref="historyPowerChartCanvas" class="chart-canvas"></canvas>
+              <div v-if="chartHover['history-powerKw']" class="chart-tooltip" :style="{ left: chartHover['history-powerKw'].left, top: chartHover['history-powerKw'].top }">{{ chartHover['history-powerKw'].text }}</div>
+            </div>
+          </section>
+
+          <section class="chart-card chart-panel">
+            <header class="chart-title-row"><h3>历史扭矩曲线（时间-Nm）</h3></header>
+            <div class="chart-wrap" @mousemove="updateChartHover('history-torqueNm', $event)" @mouseleave="clearChartHover('history-torqueNm')">
+              <canvas ref="historyTorqueChartCanvas" class="chart-canvas"></canvas>
+              <div v-if="chartHover['history-torqueNm']" class="chart-tooltip" :style="{ left: chartHover['history-torqueNm'].left, top: chartHover['history-torqueNm'].top }">{{ chartHover['history-torqueNm'].text }}</div>
+            </div>
+          </section>
+        </section>
       </div>
     </div>
   </main>

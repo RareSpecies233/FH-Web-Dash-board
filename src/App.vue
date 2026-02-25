@@ -15,12 +15,15 @@ const lastUpdated = ref('-')
 const telemetry = ref(null)
 const chartCanvas = ref(null)
 const gChartCanvas = ref(null)
+const historyChartCanvas = ref(null)
+const historyGChartCanvas = ref(null)
 let ws = null
 
 const navItems = [
   { key: 'overview', label: '数据包总览' },
   { key: 'dashboard', label: '仪表盘' },
   { key: 'accelTest', label: '加速测试' },
+  { key: 'history', label: '测试历史' },
 ]
 
 const fh5CarMap = fh5CarMapData.cars || {}
@@ -105,6 +108,9 @@ const isGamePaused = computed(() => {
 
 const speedKmhValue = computed(() => Math.max(0, Number(telemetry.value?.speedKmh || 0)))
 const rpmValue = computed(() => Math.max(0, Number(telemetry.value?.currentEngineRpm || 0)))
+const powerKwValue = computed(() => Math.max(0, Number(telemetry.value?.power || 0)))
+const horsepowerValue = computed(() => powerKwValue.value * 1.34102209)
+const torqueNmValue = computed(() => Math.max(0, Number(telemetry.value?.torque || 0)))
 const rpmMax = computed(() => {
   const value = Number(telemetry.value?.engineMaxRpm || 0)
   return value > 0 ? value : 10000
@@ -141,6 +147,8 @@ const dashLowerStyle = computed(() => ({ backgroundColor: zoneColor(aiBrakeRatio
 
 const speedGaugeStyle = computed(() => getGaugeStyle(speedKmhValue.value, 420, '#2563eb'))
 const rpmGaugeStyle = computed(() => getGaugeStyle(rpmValue.value, rpmMax.value, zoneColor(rpmRatio.value)))
+const powerGaugeStyle = computed(() => getGaugeStyle(powerKwValue.value, 1500, '#f59e0b'))
+const torqueGaugeStyle = computed(() => getGaugeStyle(torqueNmValue.value, 2000, '#7c3aed'))
 const accelPageStyle = computed(() => ({ backgroundColor: testRunning.value ? zoneColor(rpmRatio.value) : '#ffffff' }))
 const zGValue = computed(() => {
   const accelerationZ = Number(telemetry.value?.accelerationZ || 0)
@@ -151,6 +159,8 @@ const testRunning = ref(false)
 const testAutoArmed = ref(true)
 const testStartMs = ref(0)
 const zeroSpeedSinceMs = ref(null)
+const disableRealtimeDrawing = ref(false)
+const testEndNoticeVisible = ref(false)
 const testSamples = ref([])
 const testMilestones = ref(createMilestones())
 const testMeta = ref(null)
@@ -158,7 +168,9 @@ const launchPromptVisible = ref(false)
 const latestRun = ref(null)
 const savedRuns = ref([])
 const selectedCompareId = ref('')
+const selectedHistoryRunId = ref('')
 const importedRun = ref(null)
+let testEndNoticeTimer = null
 
 const activeMetricSamples = computed(() => {
   if (testRunning.value) return testSamples.value
@@ -178,6 +190,22 @@ const gExtremes = computed(() => {
   return {
     maxAccelG: maxAccel,
     maxDecelG: minDecel,
+  }
+})
+
+const powerExtremes = computed(() => {
+  const samples = activeMetricSamples.value
+  if (!Array.isArray(samples) || samples.length === 0) {
+    return { maxPowerKw: null, maxHp: null, maxTorqueNm: null }
+  }
+  const powerValues = samples.map((sample) => Number(sample.powerKw)).filter((value) => Number.isFinite(value))
+  const hpValues = samples.map((sample) => Number(sample.hp)).filter((value) => Number.isFinite(value))
+  const torqueValues = samples.map((sample) => Number(sample.torqueNm)).filter((value) => Number.isFinite(value))
+
+  return {
+    maxPowerKw: powerValues.length ? Math.max(...powerValues) : null,
+    maxHp: hpValues.length ? Math.max(...hpValues) : null,
+    maxTorqueNm: torqueValues.length ? Math.max(...torqueValues) : null,
   }
 })
 
@@ -225,12 +253,21 @@ const compareRun = computed(() => {
   return null
 })
 
+const selectedHistoryRun = computed(() => {
+  if (!savedRuns.value.length) return null
+  const found = savedRuns.value.find((item) => item.id === selectedHistoryRunId.value)
+  return found || savedRuns.value[0]
+})
+
 const accelMetrics = computed(() => {
   const m = testRunning.value ? testMilestones.value : (latestRun.value?.milestones || createMilestones())
   const decel = computeDecelMilestones(activeMetricSamples.value)
   return [
     { label: '实时速度', value: `${toNumber(speedKmhValue.value, 1)} km/h` },
     { label: '当前G值', value: `${toNumber(zGValue.value, 3)} g` },
+    { label: '最大功率', value: `${toNumber(powerExtremes.value.maxPowerKw, 1)} kW` },
+    { label: '最大马力', value: `${toNumber(powerExtremes.value.maxHp, 1)} HP` },
+    { label: '最大扭矩', value: `${toNumber(powerExtremes.value.maxTorqueNm, 1)} Nm` },
     { label: '最大加速G值', value: `${toNumber(gExtremes.value.maxAccelG, 3)} g` },
     { label: '最大减速G值', value: `${toNumber(maxDecelGAbs.value, 3)} g` },
     { label: '0-100 km/h', value: formatSec(m.to100) },
@@ -335,7 +372,14 @@ function startAccelerationTest() {
   testStartMs.value = performance.now()
   zeroSpeedSinceMs.value = null
   testMilestones.value = createMilestones()
-  testSamples.value = [{ t: 0, speed: speedKmhValue.value, g: zGValue.value }]
+  testSamples.value = [{
+    t: 0,
+    speed: speedKmhValue.value,
+    g: zGValue.value,
+    powerKw: powerKwValue.value,
+    hp: horsepowerValue.value,
+    torqueNm: torqueNmValue.value,
+  }]
   const carOrdinal = telemetry.value?.carOrdinal ?? 0
   testMeta.value = {
     carOrdinal,
@@ -361,14 +405,19 @@ function recordAccelerationSample(data) {
   const elapsedSec = (now - testStartMs.value) / 1000
   const speed = Math.max(0, Number(data.speedKmh || 0))
   const gValue = Number(data.accelerationZ || 0) / 9.80665
+  const powerKw = Math.max(0, Number(data.power || 0))
+  const hp = powerKw * 1.34102209
+  const torqueNm = Math.max(0, Number(data.torque || 0))
   const last = testSamples.value[testSamples.value.length - 1]
   if (
     !last ||
     elapsedSec - last.t >= 0.05 ||
     Math.abs(speed - last.speed) >= 0.5 ||
-    Math.abs((last.g ?? 0) - gValue) >= 0.03
+    Math.abs((last.g ?? 0) - gValue) >= 0.03 ||
+    Math.abs((last.powerKw ?? 0) - powerKw) >= 5 ||
+    Math.abs((last.torqueNm ?? 0) - torqueNm) >= 10
   ) {
-    testSamples.value.push({ t: elapsedSec, speed, g: gValue })
+    testSamples.value.push({ t: elapsedSec, speed, g: gValue, powerKw, hp, torqueNm })
   }
   const reached400 = maybeMarkMilestones(speed, elapsedSec)
   if (speed <= 0.5) {
@@ -377,8 +426,8 @@ function recordAccelerationSample(data) {
     zeroSpeedSinceMs.value = null
   }
 
-  const stayedZeroFor2Sec = zeroSpeedSinceMs.value !== null && now - zeroSpeedSinceMs.value >= 2000
-  if (reached400 || stayedZeroFor2Sec) {
+  const stayedZeroFor250ms = zeroSpeedSinceMs.value !== null && now - zeroSpeedSinceMs.value >= 250
+  if (reached400 || stayedZeroFor250ms) {
     stopAndSaveTest()
   }
 }
@@ -405,6 +454,9 @@ function loadRunsFromStorage() {
     const parsed = JSON.parse(raw)
     if (Array.isArray(parsed)) {
       savedRuns.value = parsed.filter((item) => Array.isArray(item.samples) && item.samples.length > 0)
+      if (savedRuns.value.length) {
+        selectedHistoryRunId.value = savedRuns.value[0].id
+      }
     }
   } catch (error) {
     console.error(error)
@@ -415,11 +467,20 @@ function stopAndSaveTest() {
   if (!testRunning.value) return
   testRunning.value = false
   zeroSpeedSinceMs.value = null
+  showTestEndedNotice()
   if (testSamples.value.length < 2) return
   const run = buildRunObject()
   savedRuns.value = [run, ...savedRuns.value].slice(0, 60)
   latestRun.value = run
   saveRunsToStorage()
+}
+
+function showTestEndedNotice() {
+  testEndNoticeVisible.value = true
+  if (testEndNoticeTimer) clearTimeout(testEndNoticeTimer)
+  testEndNoticeTimer = setTimeout(() => {
+    testEndNoticeVisible.value = false
+  }, 750)
 }
 
 function resetCurrentTest() {
@@ -447,12 +508,16 @@ function deleteSavedRun(runId) {
   savedRuns.value = savedRuns.value.filter((item) => item.id !== runId)
   if (selectedCompareId.value === runId) selectedCompareId.value = ''
   if (latestRun.value?.id === runId) latestRun.value = null
+  if (selectedHistoryRunId.value === runId) {
+    selectedHistoryRunId.value = savedRuns.value[0]?.id || ''
+  }
   saveRunsToStorage()
 }
 
 function clearAllSavedRuns() {
   savedRuns.value = []
   selectedCompareId.value = ''
+  selectedHistoryRunId.value = ''
   if (!testRunning.value) latestRun.value = null
   saveRunsToStorage()
 }
@@ -565,6 +630,49 @@ function drawChart({ canvas, valueKey, yLabel, colors, minDefault, maxDefault })
   }
 }
 
+function drawHistoryChart({ canvas, valueKey, yLabel, colors, minDefault, maxDefault }) {
+  if (!canvas) return
+  const run = selectedHistoryRun.value
+  if (!run || !Array.isArray(run.samples) || run.samples.length < 2) return
+
+  const rect = canvas.getBoundingClientRect()
+  const dpr = window.devicePixelRatio || 1
+  canvas.width = Math.max(1, Math.floor(rect.width * dpr))
+  canvas.height = Math.max(1, Math.floor(rect.height * dpr))
+  const context = canvas.getContext('2d')
+  if (!context) return
+  context.scale(dpr, dpr)
+
+  context.clearRect(0, 0, rect.width, rect.height)
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, rect.width, rect.height)
+
+  const left = 44
+  const right = 14
+  const top = 14
+  const bottom = 30
+  const width = rect.width - left - right
+  const height = rect.height - top - bottom
+
+  context.strokeStyle = '#d1d5db'
+  context.lineWidth = 1
+  context.strokeRect(left, top, width, height)
+
+  const maxT = Math.max(...run.samples.map((sample) => Number(sample.t || 0)), 5)
+  const values = run.samples.map((sample) => Number(sample[valueKey])).filter((item) => Number.isFinite(item))
+  if (!values.length) return
+  const xMax = Math.ceil(maxT)
+  const yMax = Math.max(maxDefault, Math.max(...values))
+  const yMin = Math.min(minDefault, Math.min(...values))
+
+  drawCurveOnCanvas(context, run, colors.primary, xMax, yMin, yMax, left, top, width, height, valueKey)
+
+  context.fillStyle = '#6b7280'
+  context.font = '11px sans-serif'
+  context.fillText('时间(s)', left + width - 48, rect.height - 8)
+  context.fillText(yLabel, 4, top + 10)
+}
+
 function drawAccelerationChart() {
   drawChart({
     canvas: chartCanvas.value,
@@ -582,6 +690,28 @@ function drawGChart() {
     valueKey: 'g',
     yLabel: 'G值(g)',
     colors: { primary: '#16a34a', compare: '#dc2626' },
+    minDefault: -1,
+    maxDefault: 1,
+  })
+}
+
+function drawHistoryAccelerationChart() {
+  drawHistoryChart({
+    canvas: historyChartCanvas.value,
+    valueKey: 'speed',
+    yLabel: '车速(km/h)',
+    colors: { primary: '#2563eb' },
+    minDefault: 0,
+    maxDefault: 100,
+  })
+}
+
+function drawHistoryGChart() {
+  drawHistoryChart({
+    canvas: historyGChartCanvas.value,
+    valueKey: 'g',
+    yLabel: 'G值(g)',
+    colors: { primary: '#16a34a' },
     minDefault: -1,
     maxDefault: 1,
   })
@@ -671,18 +801,26 @@ function connectTelemetrySocket() {
 
 function handleResize() {
   if (activeView.value === 'accelTest') {
+    if (disableRealtimeDrawing.value && testRunning.value) return
     drawAccelerationChart()
     drawGChart()
+  }
+  if (activeView.value === 'history') {
+    drawHistoryAccelerationChart()
+    drawHistoryGChart()
   }
 }
 
 watch(
   () => [
     activeView.value,
+    disableRealtimeDrawing.value,
     testRunning.value,
     testSamples.value.length,
     latestRun.value?.id,
     selectedCompareId.value,
+    selectedHistoryRunId.value,
+    savedRuns.value.length,
     importedRun.value?.id,
   ],
   async () => {
@@ -691,9 +829,18 @@ watch(
       testAutoArmed.value = true
     }
     if (activeView.value === 'accelTest') {
+      if (disableRealtimeDrawing.value && testRunning.value) return
       await nextTick()
       drawAccelerationChart()
       drawGChart()
+    }
+    if (activeView.value === 'history') {
+      if (!selectedHistoryRunId.value && savedRuns.value.length) {
+        selectedHistoryRunId.value = savedRuns.value[0].id
+      }
+      await nextTick()
+      drawHistoryAccelerationChart()
+      drawHistoryGChart()
     }
   },
 )
@@ -706,6 +853,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   ws?.close()
+  if (testEndNoticeTimer) clearTimeout(testEndNoticeTimer)
   window.removeEventListener('resize', handleResize)
 })
 </script>
@@ -786,6 +934,11 @@ onBeforeUnmount(() => {
                   <span>档位</span>
                   <strong>{{ dashboardGear }}</strong>
                 </div>
+                <div class="engine-metric-list">
+                  <p>功率：{{ toNumber(powerKwValue, 1) }} kW</p>
+                  <p>马力：{{ toNumber(horsepowerValue, 1) }} HP</p>
+                  <p>扭矩：{{ toNumber(torqueNmValue, 1) }} Nm</p>
+                </div>
               </article>
 
               <article class="gauge-card">
@@ -830,8 +983,15 @@ onBeforeUnmount(() => {
         </section>
       </section>
 
-      <section v-else class="accel-page card" :style="accelPageStyle">
+      <section v-else-if="activeView === 'accelTest'" class="accel-page card" :style="accelPageStyle">
         <p class="tips tips-small">点击开始测试或弹射起步以开始测试，点击停止测试以结束测试</p>
+
+        <section class="card">
+          <label class="toggle-row">
+            <input v-model="disableRealtimeDrawing" type="checkbox" />
+            <span>关闭实时绘制图表</span>
+          </label>
+        </section>
 
         <section class="card accel-actions">
           <button class="action-btn primary" @click="startAccelerationTest" :disabled="testRunning">开始测试</button>
@@ -869,25 +1029,71 @@ onBeforeUnmount(() => {
         </section>
 
         <section class="card">
-          <h3>历史测试（本地存储）</h3>
+          <h3>功率与扭矩</h3>
+          <div class="gauge-wrap gauge-wrap-power">
+            <article class="gauge-card">
+              <h3>功率</h3>
+              <div class="gauge" :style="powerGaugeStyle">
+                <div class="gauge-inner">
+                  <strong>{{ toNumber(powerKwValue, 1) }}</strong>
+                  <span>kW</span>
+                </div>
+              </div>
+            </article>
+
+            <article class="gauge-card">
+              <h3>扭矩</h3>
+              <div class="gauge" :style="torqueGaugeStyle">
+                <div class="gauge-inner">
+                  <strong>{{ toNumber(torqueNmValue, 1) }}</strong>
+                  <span>Nm</span>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+      </section>
+
+      <section v-else-if="activeView === 'history'" class="accel-page card">
+        <section class="card">
+          <h3>测试历史</h3>
           <section class="accel-actions" v-if="savedRuns.length">
-            <button class="action-btn" @click="clearAllSavedRuns">清空所有历史</button>
+            <button class="action-btn" @click="clearAllSavedRuns">清空所有测试结果</button>
           </section>
           <div class="history-list" v-if="savedRuns.length">
-            <div class="history-item" v-for="run in savedRuns" :key="run.id">
+            <button
+              class="history-item history-select"
+              :class="{ active: selectedHistoryRunId === run.id }"
+              v-for="run in savedRuns"
+              :key="run.id"
+              @click="selectedHistoryRunId = run.id"
+            >
               <div>
                 <strong>{{ run.carName }}</strong>
                 <p>{{ new Date(run.timestamp).toLocaleString('zh-CN') }}</p>
               </div>
               <div class="history-actions">
-                <button class="action-btn" @click="loadRunAsPrimary(run)">主曲线</button>
-                <button class="action-btn" @click="selectedCompareId = run.id">设为对比</button>
-                <button class="action-btn" @click="deleteSavedRun(run.id)">删除</button>
+                <span class="action-btn pseudo">查看曲线</span>
+                <span class="action-btn pseudo" @click.stop="deleteSavedRun(run.id)">删除</span>
               </div>
-            </div>
+            </button>
           </div>
           <p v-else class="tips">暂无测试记录，开始一次测试后会自动保存到本地。</p>
         </section>
+
+        <section v-if="selectedHistoryRun" class="charts-row">
+          <section class="card chart-card">
+            <h3>历史加速曲线（时间-车速）</h3>
+            <canvas ref="historyChartCanvas" class="chart-canvas"></canvas>
+          </section>
+
+          <section class="card chart-card">
+            <h3>历史G值曲线（时间-Z轴G值）</h3>
+            <canvas ref="historyGChartCanvas" class="chart-canvas"></canvas>
+          </section>
+        </section>
+
       </section>
     </section>
 
@@ -903,6 +1109,12 @@ onBeforeUnmount(() => {
         <div class="modal-actions">
           <button class="action-btn" @click="cancelLaunchPrompt">取消</button>
         </div>
+      </div>
+    </div>
+
+    <div v-if="testEndNoticeVisible" class="modal-mask">
+      <div class="modal-card">
+        <h3>已结束测试</h3>
       </div>
     </div>
   </main>

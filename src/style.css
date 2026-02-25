@@ -737,7 +737,7 @@ body {
   filter: blur(0.75px);
   opacity: 0;
   animation-name: burstLaunch;
-  animation-duration: calc((var(--base-dur) / var(--launch-burst-speed-factor, 1)) * 3);
+  animation-duration: var(--dur);
   animation-timing-function: linear;
   animation-iteration-count: 1;
   animation-delay: var(--delay);

@@ -583,17 +583,19 @@ function createLaunchStars(count = 90) {
   })
 }
 
-function createLaunchBurst() {
+function createLaunchBurst(speedFactor = 1) {
   const index = launchBurstIdSeed++
     const angle = (Math.random() * 360).toFixed(1)
     const length = (Math.random() * 320 + 150).toFixed(1)
     const travel = (Math.random() * 70 + 78).toFixed(1)
     const thickness = (Math.random() * 6.8 + 2.8).toFixed(2)
     const baseDuration = Math.random() * 1.6 + 1.2
+    const normalizedFactor = Math.max(0.1, speedFactor)
+    const duration = (baseDuration / normalizedFactor) * 3
     const delay = (Math.random() * 1.4).toFixed(2)
     const startHue = Math.random() > 0.5 ? 'rgba(250, 204, 21, 0.92)' : 'rgba(245, 158, 11, 0.9)'
     const endHue = Math.random() > 0.45 ? 'rgba(239, 68, 68, 0.96)' : 'rgba(220, 38, 38, 0.94)'
-    const lifeMs = ((baseDuration / 0.1) + Number(delay)) * 1000 + 160
+    const lifeMs = (duration + Number(delay)) * 1000 + 80
     return {
       id: `b-${index}-${Date.now()}`,
       expireAt: performance.now() + lifeMs,
@@ -602,7 +604,7 @@ function createLaunchBurst() {
         '--length': `${length}px`,
         '--travel': `${travel}vmax`,
         '--thickness': `${thickness}px`,
-        '--base-dur': `${baseDuration.toFixed(2)}s`,
+        '--dur': `${duration.toFixed(2)}s`,
         '--delay': `${delay}s`,
         '--c1': startHue,
         '--c2': endHue,
@@ -611,13 +613,13 @@ function createLaunchBurst() {
 }
 
 function createLaunchBursts(count = 56) {
-  return Array.from({ length: count }, () => createLaunchBurst())
+  return Array.from({ length: count }, () => createLaunchBurst(launchBurstSpeedFactor.value))
 }
 
 function emitLaunchBursts(count = 8) {
   const now = performance.now()
   const alive = launchBursts.value.filter((item) => item.expireAt > now)
-  const created = Array.from({ length: count }, () => createLaunchBurst())
+  const created = Array.from({ length: count }, () => createLaunchBurst(launchBurstSpeedFactor.value))
   const merged = [...alive, ...created]
   launchBursts.value = merged.length > MAX_LAUNCH_BURSTS
     ? merged.slice(merged.length - MAX_LAUNCH_BURSTS)
@@ -1866,7 +1868,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="launchModeActive && activeView === 'dashboard'" class="launch-overlay">
-      <div class="launch-frame" :style="{ '--launch-frame-color': launchFrameColor, '--launch-burst-speed-factor': launchBurstSpeedFactor }">
+      <div class="launch-frame" :style="{ '--launch-frame-color': launchFrameColor }">
         <div class="launch-stars">
           <span v-for="star in launchStars" :key="star.id" class="launch-star" :style="star.style"></span>
         </div>

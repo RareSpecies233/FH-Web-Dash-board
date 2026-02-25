@@ -684,58 +684,61 @@ body {
   overflow: hidden;
 }
 
-.launch-lines {
+.launch-front-cone {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at center, rgba(191, 219, 254, 0.95) 0%, rgba(96, 165, 250, 0.75) 14%, rgba(30, 58, 138, 0.18) 38%, transparent 58%);
+  filter: blur(1px);
+  pointer-events: none;
+}
+
+.launch-rear-dark {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 22%, rgba(0, 0, 0, 0.86) 76%);
+  pointer-events: none;
+}
+
+.launch-side-bands {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 50%;
-  background-image: repeating-linear-gradient(0deg, rgba(148, 163, 184, 0.22) 0 1px, transparent 1px 20px);
-  animation: warpStretch 0.95s ease-in-out infinite;
+  background-image: repeating-linear-gradient(0deg, rgba(186, 230, 253, 0.28) 0 1px, transparent 1px 12px);
+  animation: warpSide 0.72s linear infinite;
   pointer-events: none;
 }
 
-.launch-lines.left {
+.launch-side-bands.left {
   left: 0;
   transform-origin: right center;
 }
 
-.launch-lines.right {
+.launch-side-bands.right {
   right: 0;
   transform-origin: left center;
 }
 
-.launch-stars {
-  position: absolute;
-  inset: 0;
-  background-image:
-    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.2) 1px, transparent 1px),
-    radial-gradient(circle at 50% 50%, rgba(147, 197, 253, 0.12) 2px, transparent 2px);
-  background-size: 32px 32px, 70px 70px;
-  animation: warpStars 1.2s linear infinite;
-  pointer-events: none;
-  opacity: 0.45;
-}
-
-@keyframes warpStretch {
+@keyframes warpSide {
   from {
     transform: scaleX(0.02);
-    opacity: 0.2;
+    opacity: 0.22;
   }
   to {
-    transform: scaleX(1.25);
+    transform: scaleX(1.35);
     opacity: 0.95;
   }
 }
 
-@keyframes warpStars {
-  from {
-    transform: scale(0.92);
-    opacity: 0.2;
-  }
-  to {
-    transform: scale(1.18);
-    opacity: 0.55;
-  }
+.launch-ready {
+  position: relative;
+  z-index: 1;
+  color: #e0f2fe;
+  font-size: clamp(24px, 4vw, 56px);
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-shadow: 0 0 24px rgba(125, 211, 252, 0.6);
 }
 
 .launch-speed {
@@ -782,22 +785,14 @@ body {
 }
 
 .launch-metric {
-  border: 1px solid rgba(148, 163, 184, 0.45);
-  border-radius: 10px;
-  background: rgba(15, 23, 42, 0.55);
-  padding: 8px;
+  padding: 2px;
   text-align: center;
 }
 
 .launch-metric span {
-  display: block;
-  color: #94a3b8;
-  font-size: 12px;
-}
-
-.launch-metric strong {
   color: #f8fafc;
-  font-size: 18px;
+  font-size: 20px;
+  text-shadow: 0 0 14px rgba(125, 211, 252, 0.35);
 }
 
 @media (max-width: 900px) {

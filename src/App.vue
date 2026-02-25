@@ -295,24 +295,23 @@ const launchRpmColor = computed(() => {
 })
 
 const launchFrameColor = computed(() => {
-  if (rpmRatio.value >= 0.9) return '#ef4444'
-  if (rpmRatio.value >= 0.8) return '#fde047'
-  return 'transparent'
+  if (rpmValue.value < 70) return 'transparent'
+  return launchRpmColor.value
 })
 
 const launchMetrics = computed(() => {
   const m = launchMilestones.value
-  if (!launchStarted.value || speedKmhValue.value <= 0.5) {
+  if (!launchStarted.value) {
     return [
-      { label: '0-100km/h', value: '0-100km/h' },
-      { label: '0-200km/h', value: '0-200km/h' },
-      { label: '0-300km/h', value: '0-300km/h' },
+      { label: '0-100km/h', value: '【0-100km/h】' },
+      { label: '0-200km/h', value: '【0-200km/h】' },
+      { label: '0-300km/h', value: '【0-300km/h】' },
     ]
   }
   return [
-    { label: '0-100km/h', value: formatSec(m.to100) },
-    { label: '0-200km/h', value: formatSec(m.to200) },
-    { label: '0-300km/h', value: formatSec(m.to300) },
+    { label: '0-100km/h', value: m.to100 === null ? '--' : formatSec(m.to100) },
+    { label: '0-200km/h', value: m.to200 === null ? '--' : formatSec(m.to200) },
+    { label: '0-300km/h', value: m.to300 === null ? '--' : formatSec(m.to300) },
   ]
 })
 
@@ -567,10 +566,10 @@ function stopLaunchMode() {
   launchZeroSinceMs.value = null
 }
 
-function recordLaunchProgress(speed) {
+function recordLaunchProgress(speed, handBrake) {
   const now = performance.now()
   if (!launchStarted.value) {
-    if (speed > 0.5) {
+    if (handBrake < 100) {
       launchStarted.value = true
       launchStartMs.value = now
       launchMilestones.value = createMilestones()
@@ -1212,9 +1211,10 @@ function connectTelemetrySocket() {
           }
 
           if (launchModeActive.value) {
-            recordLaunchProgress(speed)
-            if (brake >= 100) {
+            if (brake >= 100 || accel < 100) {
               stopLaunchMode()
+            } else {
+              recordLaunchProgress(speed, handBrake)
             }
           }
         }
@@ -1753,20 +1753,21 @@ onBeforeUnmount(() => {
 
     <div v-if="launchModeActive && activeView === 'dashboard'" class="launch-overlay">
       <div class="launch-frame" :style="{ borderColor: launchFrameColor }">
-        <div class="launch-lines left"></div>
-        <div class="launch-lines right"></div>
-        <div class="launch-stars"></div>
-        <div class="launch-speed">
+        <div class="launch-front-cone"></div>
+        <div class="launch-rear-dark"></div>
+        <div class="launch-side-bands left"></div>
+        <div class="launch-side-bands right"></div>
+        <div class="launch-speed" v-if="launchStarted">
           <strong>{{ toNumber(speedKmhValue, 1) }}</strong>
           <span>km/h</span>
         </div>
+        <div class="launch-ready" v-else>弹射起步就绪！</div>
         <div class="launch-rpm-track">
           <div class="launch-rpm-fill" :style="{ width: `${Math.max(0, Math.min(100, rpmRatio * 100))}%`, backgroundColor: launchRpmColor }"></div>
         </div>
         <div class="launch-metrics">
           <div class="launch-metric" v-for="item in launchMetrics" :key="item.label">
-            <span>{{ item.label }}</span>
-            <strong>{{ item.value }}</strong>
+            <span>{{ item.value }}</span>
           </div>
         </div>
       </div>

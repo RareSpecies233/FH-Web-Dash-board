@@ -196,6 +196,7 @@ const isFullscreen = ref(false)
 let testEndNoticeTimer = null
 let lastAccelRenderAtMs = 0
 let manualStartTimer = null
+let launchBurstTimer = null
 
 const activeSummary = computed(() => {
   if (testRunning.value) return runningSummary.value
@@ -575,10 +576,10 @@ function createLaunchStars(count = 90) {
 function createLaunchBursts(count = 34) {
   return Array.from({ length: count }, (_, index) => {
     const angle = (Math.random() * 360).toFixed(1)
-    const length = (Math.random() * 220 + 90).toFixed(1)
-    const travel = (Math.random() * 290 + 150).toFixed(1)
-    const thickness = (Math.random() * 3.4 + 1.2).toFixed(2)
-    const duration = (Math.random() * 0.9 + 0.28).toFixed(2)
+    const length = (Math.random() * 320 + 150).toFixed(1)
+    const travel = (Math.random() * 380 + 180).toFixed(1)
+    const thickness = (Math.random() * 6.8 + 2.8).toFixed(2)
+    const duration = (Math.random() * 1.1 + 0.22).toFixed(2)
     const delay = (Math.random() * 1.4).toFixed(2)
     const startHue = Math.random() > 0.5 ? 'rgba(250, 204, 21, 0.92)' : 'rgba(245, 158, 11, 0.9)'
     const endHue = Math.random() > 0.45 ? 'rgba(239, 68, 68, 0.96)' : 'rgba(220, 38, 38, 0.94)'
@@ -598,6 +599,23 @@ function createLaunchBursts(count = 34) {
   })
 }
 
+function clearLaunchBurstTimer() {
+  if (launchBurstTimer) {
+    clearTimeout(launchBurstTimer)
+    launchBurstTimer = null
+  }
+}
+
+function scheduleLaunchBurstRefresh() {
+  clearLaunchBurstTimer()
+  const tick = () => {
+    if (!launchModeActive.value) return
+    launchBursts.value = createLaunchBursts(40)
+    launchBurstTimer = setTimeout(tick, 140 + Math.random() * 260)
+  }
+  launchBurstTimer = setTimeout(tick, 180)
+}
+
 function startLaunchMode() {
   launchModeActive.value = true
   launchStarted.value = false
@@ -605,7 +623,8 @@ function startLaunchMode() {
   launchMilestones.value = createMilestones()
   launchZeroSinceMs.value = null
   launchStars.value = createLaunchStars()
-  launchBursts.value = createLaunchBursts()
+  launchBursts.value = createLaunchBursts(40)
+  scheduleLaunchBurstRefresh()
 }
 
 function stopLaunchMode() {
@@ -614,6 +633,7 @@ function stopLaunchMode() {
   launchStartMs.value = 0
   launchMilestones.value = createMilestones()
   launchZeroSinceMs.value = null
+  clearLaunchBurstTimer()
 }
 
 function recordLaunchProgress(speed, handBrake) {
@@ -628,7 +648,10 @@ function recordLaunchProgress(speed, handBrake) {
   }
 
   const elapsedSec = (now - launchStartMs.value) / 1000
-  maybeMarkMilestones(speed, elapsedSec)
+  const marks = launchMilestones.value
+  if (marks.to100 === null && speed >= 100) marks.to100 = elapsedSec
+  if (marks.to200 === null && speed >= 200) marks.to200 = elapsedSec
+  if (marks.to300 === null && speed >= 300) marks.to300 = elapsedSec
 
   if (speed <= 0.5) {
     if (launchZeroSinceMs.value === null) launchZeroSinceMs.value = now
@@ -1449,6 +1472,7 @@ onBeforeUnmount(() => {
   ws?.close()
   if (testEndNoticeTimer) clearTimeout(testEndNoticeTimer)
   clearManualStartTimer()
+  clearLaunchBurstTimer()
   dashModeHoldStartMs.value = null
   document.removeEventListener('fullscreenchange', syncFullscreenState)
   window.removeEventListener('resize', handleResize)
@@ -1802,7 +1826,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="launchModeActive && activeView === 'dashboard'" class="launch-overlay">
-      <div class="launch-frame" :style="{ borderColor: launchFrameColor }">
+      <div class="launch-frame" :style="{ '--launch-frame-color': launchFrameColor }">
         <div class="launch-stars">
           <span v-for="star in launchStars" :key="star.id" class="launch-star" :style="star.style"></span>
         </div>

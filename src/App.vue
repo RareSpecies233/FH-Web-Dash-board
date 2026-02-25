@@ -165,8 +165,8 @@ const manualCountdownStartMs = ref(null)
 const manualCountdownElapsedMs = ref(0)
 const dashToAccelPromptVisible = ref(false)
 const dashToAccelCancelled = ref(false)
-const dashSteerLeftProgress = ref(0)
-const dashSteerRightProgress = ref(0)
+const dashToAccelHoldStartMs = ref(null)
+const dashToAccelHoldProgress = ref(0)
 const dashModePromptVisible = ref(false)
 const dashModeCancelled = ref(false)
 const dashModeHoldStartMs = ref(null)
@@ -731,7 +731,7 @@ function handleHistoryImportTxt(event) {
   event.target.value = ''
 }
 
-function getDisplaySamples(samples, maxPoints = 280) {
+function getDisplaySamples(samples, maxPoints = 220) {
   if (!Array.isArray(samples) || samples.length <= maxPoints) return samples || []
   const result = []
   const step = (samples.length - 1) / (maxPoints - 1)
@@ -1051,6 +1051,22 @@ function exportTorqueChartImage() {
   exportCanvasImage(torqueChartCanvas, 'torque-curve')
 }
 
+function exportHistorySpeedChartImage() {
+  exportCanvasImage(historyChartCanvas, 'history-accel-curve')
+}
+
+function exportHistoryGChartImage() {
+  exportCanvasImage(historyGChartCanvas, 'history-g-curve')
+}
+
+function exportHistoryPowerChartImage() {
+  exportCanvasImage(historyPowerChartCanvas, 'history-power-curve')
+}
+
+function exportHistoryTorqueChartImage() {
+  exportCanvasImage(historyTorqueChartCanvas, 'history-torque-curve')
+}
+
 function connectTelemetrySocket() {
   connectionStatus.value = '连接中'
   ws = new WebSocket(wsUrl)
@@ -1075,27 +1091,32 @@ function connectTelemetrySocket() {
         const brake = Number(payload.data.brake || 0)
 
         if (activeView.value === 'dashboard') {
-          const dashTrigger = handBrake >= 100 && accel >= 100
+          const dashTrigger = handBrake >= 100 && brake >= 100
           if (dashTrigger && !dashToAccelCancelled.value && !dashToAccelPromptVisible.value) {
             dashToAccelPromptVisible.value = true
-            dashSteerLeftProgress.value = 0
-            dashSteerRightProgress.value = 0
-          }
-          if (!dashTrigger) {
-            dashToAccelCancelled.value = false
-            dashToAccelPromptVisible.value = false
-            dashSteerLeftProgress.value = 0
-            dashSteerRightProgress.value = 0
+            dashToAccelHoldStartMs.value = performance.now()
+            dashToAccelHoldProgress.value = 0
           }
           if (dashToAccelPromptVisible.value) {
-            const steer = Math.max(-100, Math.min(100, Number(payload.data.steerPercent || 0)))
-            if (steer < 0) dashSteerLeftProgress.value = Math.max(dashSteerLeftProgress.value, Math.abs(steer))
-            if (steer > 0) dashSteerRightProgress.value = Math.max(dashSteerRightProgress.value, steer)
-            if (dashSteerLeftProgress.value >= 50 && dashSteerRightProgress.value >= 50) {
+            if (!dashTrigger) {
               dashToAccelPromptVisible.value = false
-              activeView.value = 'accelTest'
-              startAccelerationTest()
+              dashToAccelCancelled.value = false
+              dashToAccelHoldStartMs.value = null
+              dashToAccelHoldProgress.value = 0
+            } else {
+              const elapsed = performance.now() - (dashToAccelHoldStartMs.value || performance.now())
+              dashToAccelHoldProgress.value = Math.max(0, Math.min(100, (elapsed / 2000) * 100))
+              if (dashToAccelHoldProgress.value >= 100) {
+                dashToAccelPromptVisible.value = false
+                dashToAccelHoldStartMs.value = null
+                dashToAccelHoldProgress.value = 0
+                dashToAccelCancelled.value = false
+                activeView.value = 'accelTest'
+                startAccelerationTest()
+              }
             }
+          } else if (!dashTrigger) {
+            dashToAccelCancelled.value = false
           }
         }
 
@@ -1114,7 +1135,7 @@ function connectTelemetrySocket() {
               dashModeCancelled.value = false
             } else {
               const elapsed = performance.now() - (dashModeHoldStartMs.value || performance.now())
-              dashModeHoldProgress.value = Math.max(0, Math.min(100, (elapsed / 5000) * 100))
+              dashModeHoldProgress.value = Math.max(0, Math.min(100, (elapsed / 2000) * 100))
               if (dashModeHoldProgress.value >= 100) {
                 dashModePromptVisible.value = false
                 dashModeHoldStartMs.value = null
@@ -1172,7 +1193,7 @@ function connectTelemetrySocket() {
 
         if (activeView.value === 'accelTest' && testRunning.value && !disableRealtimeDrawing.value) {
           const now = performance.now()
-          if (now - lastAccelRenderAtMs >= 130) {
+          if (now - lastAccelRenderAtMs >= 170) {
             lastAccelRenderAtMs = now
             accelRenderSerial.value += 1
           }
@@ -1235,16 +1256,18 @@ watch(
     if (activeView.value !== 'dashboard') {
       dashToAccelPromptVisible.value = false
       dashToAccelCancelled.value = false
-      dashSteerLeftProgress.value = 0
-      dashSteerRightProgress.value = 0
+      dashToAccelHoldStartMs.value = null
+      dashToAccelHoldProgress.value = 0
     }
     if (activeView.value === 'accelTest') {
       if (disableRealtimeDrawing.value && testRunning.value) return
       await nextTick()
       drawAccelerationChart()
       drawGChart()
-      drawPowerChart()
-      drawTorqueChart()
+      if (!testRunning.value || accelRenderSerial.value % 2 === 0) {
+        drawPowerChart()
+        drawTorqueChart()
+      }
     }
     if (activeView.value === 'history') {
       if (!historyDetailRunId.value) return
@@ -1526,26 +1549,19 @@ onBeforeUnmount(() => {
 
     <div v-if="dashToAccelPromptVisible && activeView === 'dashboard' && !isGamePaused" class="modal-mask">
       <div class="modal-card">
-        <h3>左右转向以进行加速测试？</h3>
-        <div class="dual-progress">
-          <div class="progress-line">
-            <span>左转向</span>
-            <div class="modal-progress-track"><div class="modal-progress-fill" :style="{ width: `${dashSteerLeftProgress}%` }"></div></div>
-          </div>
-          <div class="progress-line">
-            <span>右转向</span>
-            <div class="modal-progress-track"><div class="modal-progress-fill" :style="{ width: `${dashSteerRightProgress}%` }"></div></div>
-          </div>
+        <h3>按住2秒进入加速测试模式</h3>
+        <div class="modal-progress-track">
+          <div class="modal-progress-fill" :style="{ width: `${dashToAccelHoldProgress}%` }"></div>
         </div>
         <div class="modal-actions">
-          <button class="action-btn small-btn" @click="dashToAccelPromptVisible = false; dashToAccelCancelled = true">取消</button>
+          <button class="action-btn small-btn" @click="dashToAccelPromptVisible = false; dashToAccelCancelled = true; dashToAccelHoldStartMs = null; dashToAccelHoldProgress = 0">取消</button>
         </div>
       </div>
     </div>
 
     <div v-if="dashModePromptVisible && activeView === 'accelTest' && !isGamePaused" class="modal-mask">
       <div class="modal-card">
-        <h3>按住5秒以进入仪表模式</h3>
+        <h3>按住2秒以进入仪表模式</h3>
         <div class="modal-progress-track">
           <div class="modal-progress-fill" :style="{ width: `${dashModeHoldProgress}%` }"></div>
         </div>
@@ -1577,6 +1593,11 @@ onBeforeUnmount(() => {
         <div class="history-modal-actions">
           <button class="action-btn small-btn" @click="deleteSavedRun(historyDetailRun.id)">删除此条</button>
           <button class="action-btn small-btn" @click="exportRunTxt(historyDetailRun)">导出TXT原始数据</button>
+          <button class="action-btn small-btn" @click="exportHistorySpeedChartImage">下载速度图</button>
+          <button class="action-btn small-btn" @click="exportHistoryGChartImage">下载G图</button>
+          <button class="action-btn small-btn" @click="exportHistoryPowerChartImage">下载功率图</button>
+          <button class="action-btn small-btn" @click="exportHistoryTorqueChartImage">下载扭矩图</button>
+          <button class="action-btn small-btn" @click="historyDetailRunId = ''">关闭</button>
         </div>
 
         <div class="metric-grid fixed-three-rows compact-metrics">

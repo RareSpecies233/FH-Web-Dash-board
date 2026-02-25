@@ -168,6 +168,8 @@ const launchStarted = ref(false)
 const launchStartMs = ref(0)
 const launchMilestones = ref(createMilestones())
 const launchZeroSinceMs = ref(null)
+const launchStars = ref([])
+const launchBursts = ref([])
 const dashModePromptVisible = ref(false)
 const dashModeCancelled = ref(false)
 const dashModeHoldStartMs = ref(null)
@@ -295,7 +297,7 @@ const launchRpmColor = computed(() => {
 })
 
 const launchFrameColor = computed(() => {
-  if (rpmValue.value < 70) return 'transparent'
+  if (rpmRatio.value < 0.7) return 'transparent'
   return launchRpmColor.value
 })
 
@@ -550,12 +552,60 @@ async function toggleFullscreen() {
   }
 }
 
+function createLaunchStars(count = 90) {
+  return Array.from({ length: count }, (_, index) => {
+    const size = (Math.random() * 2.1 + 0.7).toFixed(2)
+    const opacity = (Math.random() * 0.5 + 0.35).toFixed(2)
+    const duration = (Math.random() * 2.5 + 0.9).toFixed(2)
+    const delay = (Math.random() * 3).toFixed(2)
+    return {
+      id: `s-${index}-${Date.now()}`,
+      style: {
+        left: `${(Math.random() * 100).toFixed(2)}%`,
+        top: `${(Math.random() * 100).toFixed(2)}%`,
+        '--size': `${size}px`,
+        '--opacity': opacity,
+        '--dur': `${duration}s`,
+        '--delay': `${delay}s`,
+      },
+    }
+  })
+}
+
+function createLaunchBursts(count = 34) {
+  return Array.from({ length: count }, (_, index) => {
+    const angle = (Math.random() * 360).toFixed(1)
+    const length = (Math.random() * 220 + 90).toFixed(1)
+    const travel = (Math.random() * 290 + 150).toFixed(1)
+    const thickness = (Math.random() * 3.4 + 1.2).toFixed(2)
+    const duration = (Math.random() * 0.9 + 0.28).toFixed(2)
+    const delay = (Math.random() * 1.4).toFixed(2)
+    const startHue = Math.random() > 0.5 ? 'rgba(250, 204, 21, 0.92)' : 'rgba(245, 158, 11, 0.9)'
+    const endHue = Math.random() > 0.45 ? 'rgba(239, 68, 68, 0.96)' : 'rgba(220, 38, 38, 0.94)'
+    return {
+      id: `b-${index}-${Date.now()}`,
+      style: {
+        '--angle': `${angle}deg`,
+        '--length': `${length}px`,
+        '--travel': `${travel}px`,
+        '--thickness': `${thickness}px`,
+        '--dur': `${duration}s`,
+        '--delay': `${delay}s`,
+        '--c1': startHue,
+        '--c2': endHue,
+      },
+    }
+  })
+}
+
 function startLaunchMode() {
   launchModeActive.value = true
   launchStarted.value = false
   launchStartMs.value = 0
   launchMilestones.value = createMilestones()
   launchZeroSinceMs.value = null
+  launchStars.value = createLaunchStars()
+  launchBursts.value = createLaunchBursts()
 }
 
 function stopLaunchMode() {
@@ -1205,13 +1255,13 @@ function connectTelemetrySocket() {
             dashEnterAccelCancelled.value = false
           }
 
-          const launchTrigger = handBrake >= 100 && accel >= 100 && brake < 100
+          const launchTrigger = speed <= 0.5 && handBrake >= 100 && accel >= 100 && brake < 100
           if (launchTrigger && !launchModeActive.value) {
             startLaunchMode()
           }
 
           if (launchModeActive.value) {
-            if (brake >= 100 || accel < 100) {
+            if (brake >= 100) {
               stopLaunchMode()
             } else {
               recordLaunchProgress(speed, handBrake)
@@ -1753,10 +1803,13 @@ onBeforeUnmount(() => {
 
     <div v-if="launchModeActive && activeView === 'dashboard'" class="launch-overlay">
       <div class="launch-frame" :style="{ borderColor: launchFrameColor }">
-        <div class="launch-front-cone"></div>
+        <div class="launch-stars">
+          <span v-for="star in launchStars" :key="star.id" class="launch-star" :style="star.style"></span>
+        </div>
         <div class="launch-rear-dark"></div>
-        <div class="launch-side-bands left"></div>
-        <div class="launch-side-bands right"></div>
+        <div class="launch-bursts">
+          <span v-for="burst in launchBursts" :key="burst.id" class="launch-burst-line" :style="burst.style"></span>
+        </div>
         <div class="launch-speed" v-if="launchStarted">
           <strong>{{ toNumber(speedKmhValue, 1) }}</strong>
           <span>km/h</span>

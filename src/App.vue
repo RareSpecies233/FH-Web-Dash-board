@@ -1231,7 +1231,7 @@ onBeforeUnmount(() => {
           <button class="action-btn small-btn realtime-btn" :class="{ off: disableRealtimeDrawing }" @click="disableRealtimeDrawing = !disableRealtimeDrawing">
             {{ disableRealtimeDrawing ? '开启实时绘制图标' : '关闭实时绘制图标' }}
           </button>
-          <p class="tips tips-small">点击开始测试或弹射起步以开始测试，点击停止测试以结束测试</p>
+          <p class="tips tips-small">点击开始测试或弹射起步以开始测试</p>
         </div>
 
         <div class="metric-grid fixed-three-rows compact-metrics">
@@ -1366,7 +1366,9 @@ onBeforeUnmount(() => {
 
     <div v-if="launchPromptVisible && activeView === 'accelTest' && !isGamePaused" class="modal-mask">
       <div class="modal-card">
-        <h3>已检测到弹射起步，松开手刹以开始测试</h3>
+        <h2>已检测到弹射起步</h2>
+        <h3>松开手刹以开始测试</h3>
+        <h3>松开油门以取消测试</h3>
         <div class="modal-actions">
           <button class="action-btn" @click="cancelLaunchPrompt">取消</button>
         </div>

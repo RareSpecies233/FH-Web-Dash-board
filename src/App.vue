@@ -227,6 +227,10 @@ const accelMetrics = computed(() => {
   const m = testRunning.value ? testMilestones.value : (latestRun.value?.milestones || createMilestones())
   const decel = computeDecelMilestones(activeMetricSamples.value)
   return [
+    { label: '实时速度', value: `${toNumber(speedKmhValue.value, 1)} km/h` },
+    { label: '当前G值', value: `${toNumber(zGValue.value, 3)} g` },
+    { label: '最大加速G值', value: `${toNumber(gExtremes.value.maxAccelG, 3)} g` },
+    { label: '最大减速G值', value: `${toNumber(maxDecelGAbs.value, 3)} g` },
     { label: '0-100 km/h', value: formatSec(m.to100) },
     { label: '0-200 km/h', value: formatSec(m.to200) },
     { label: '0-300 km/h', value: formatSec(m.to300) },
@@ -420,6 +424,21 @@ function loadRunAsPrimary(run) {
   testRunning.value = false
   testSamples.value = []
   testMilestones.value = { ...run.milestones }
+}
+
+function deleteSavedRun(runId) {
+  if (!runId) return
+  savedRuns.value = savedRuns.value.filter((item) => item.id !== runId)
+  if (selectedCompareId.value === runId) selectedCompareId.value = ''
+  if (latestRun.value?.id === runId) latestRun.value = null
+  saveRunsToStorage()
+}
+
+function clearAllSavedRuns() {
+  savedRuns.value = []
+  selectedCompareId.value = ''
+  if (!testRunning.value) latestRun.value = null
+  saveRunsToStorage()
 }
 
 function exportCurrentRunTxt() {
@@ -705,7 +724,7 @@ onBeforeUnmount(() => {
             <div class="pedal-card">
               <span>刹车</span>
               <div class="pedal-track">
-                <div class="pedal-fill" :style="{ height: `${brakePercent}%` }"></div>
+                <div class="pedal-fill" :style="{ '--pedal-fill': `${brakePercent}%` }"></div>
               </div>
               <strong>{{ toNumber(brakePercent, 0) }}%</strong>
             </div>
@@ -722,7 +741,7 @@ onBeforeUnmount(() => {
               </article>
 
               <article class="middle-info-card">
-                <div v-if="handBrakeEngaged" class="handbrake-light">手刹</div>
+                <div class="handbrake-light" :class="{ off: !handBrakeEngaged }">手刹</div>
                 <div class="gear-box">
                   <span>档位</span>
                   <strong>{{ dashboardGear }}</strong>
@@ -743,7 +762,7 @@ onBeforeUnmount(() => {
             <div class="pedal-card">
               <span>油门</span>
               <div class="pedal-track">
-                <div class="pedal-fill accel" :style="{ height: `${accelPercent}%` }"></div>
+                <div class="pedal-fill accel" :style="{ '--pedal-fill': `${accelPercent}%` }"></div>
               </div>
               <strong>{{ toNumber(accelPercent, 0) }}%</strong>
             </div>
@@ -774,9 +793,7 @@ onBeforeUnmount(() => {
       <section v-else class="accel-page card" :style="accelPageStyle">
         <section class="card">
           <p class="tips">点击开始测试或弹射起步以开始测试</p>
-          <p class="tips">G值（Z轴加速度）：{{ toNumber(zGValue, 3) }} g</p>
-          <p class="tips">最大加速G值：{{ toNumber(gExtremes.maxAccelG, 3) }} g</p>
-          <p class="tips">最大减速G值：{{ toNumber(maxDecelGAbs, 3) }} g</p>
+          <p class="tips">实时速度与G值已并入“加速成绩”卡片</p>
         </section>
 
         <section class="card accel-actions">
@@ -802,18 +819,23 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section class="card chart-card">
-          <h3>加速曲线（时间-车速）</h3>
-          <canvas ref="chartCanvas" class="chart-canvas"></canvas>
-        </section>
+        <section class="charts-row">
+          <section class="card chart-card">
+            <h3>加速曲线（时间-车速）</h3>
+            <canvas ref="chartCanvas" class="chart-canvas"></canvas>
+          </section>
 
-        <section class="card chart-card">
-          <h3>G值曲线（时间-Z轴G值）</h3>
-          <canvas ref="gChartCanvas" class="chart-canvas"></canvas>
+          <section class="card chart-card">
+            <h3>G值曲线（时间-Z轴G值）</h3>
+            <canvas ref="gChartCanvas" class="chart-canvas"></canvas>
+          </section>
         </section>
 
         <section class="card">
           <h3>历史测试（本地存储）</h3>
+          <section class="accel-actions" v-if="savedRuns.length">
+            <button class="action-btn" @click="clearAllSavedRuns">清空所有历史</button>
+          </section>
           <div class="history-list" v-if="savedRuns.length">
             <div class="history-item" v-for="run in savedRuns" :key="run.id">
               <div>
@@ -823,6 +845,7 @@ onBeforeUnmount(() => {
               <div class="history-actions">
                 <button class="action-btn" @click="loadRunAsPrimary(run)">主曲线</button>
                 <button class="action-btn" @click="selectedCompareId = run.id">设为对比</button>
+                <button class="action-btn" @click="deleteSavedRun(run.id)">删除</button>
               </div>
             </div>
           </div>

@@ -413,6 +413,10 @@ body {
   font-size: 14px;
 }
 
+.tips-small {
+  font-size: 11px;
+}
+
 .chart-card {
   display: grid;
   gap: 8px;
@@ -483,6 +487,12 @@ body {
 .modal-card h3 {
   margin: 0;
   font-size: 16px;
+}
+
+.modal-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
 }
 
 @media (max-width: 900px) {

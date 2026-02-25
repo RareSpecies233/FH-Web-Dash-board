@@ -150,9 +150,11 @@ const zGValue = computed(() => {
 const testRunning = ref(false)
 const testAutoArmed = ref(true)
 const testStartMs = ref(0)
+const zeroSpeedSinceMs = ref(null)
 const testSamples = ref([])
 const testMilestones = ref(createMilestones())
 const testMeta = ref(null)
+const launchPromptVisible = ref(false)
 const latestRun = ref(null)
 const savedRuns = ref([])
 const selectedCompareId = ref('')
@@ -331,6 +333,7 @@ function startAccelerationTest() {
   if (testRunning.value) return
   testRunning.value = true
   testStartMs.value = performance.now()
+  zeroSpeedSinceMs.value = null
   testMilestones.value = createMilestones()
   testSamples.value = [{ t: 0, speed: speedKmhValue.value, g: zGValue.value }]
   const carOrdinal = telemetry.value?.carOrdinal ?? 0
@@ -368,8 +371,14 @@ function recordAccelerationSample(data) {
     testSamples.value.push({ t: elapsedSec, speed, g: gValue })
   }
   const reached400 = maybeMarkMilestones(speed, elapsedSec)
-  const backToZeroAfter100 = testMilestones.value.to100 !== null && speed <= 1 && elapsedSec > testMilestones.value.to100 + 0.2
-  if (reached400 || backToZeroAfter100) {
+  if (speed <= 0.5) {
+    if (zeroSpeedSinceMs.value === null) zeroSpeedSinceMs.value = now
+  } else {
+    zeroSpeedSinceMs.value = null
+  }
+
+  const stayedZeroFor2Sec = zeroSpeedSinceMs.value !== null && now - zeroSpeedSinceMs.value >= 2000
+  if (reached400 || stayedZeroFor2Sec) {
     stopAndSaveTest()
   }
 }
@@ -405,6 +414,7 @@ function loadRunsFromStorage() {
 function stopAndSaveTest() {
   if (!testRunning.value) return
   testRunning.value = false
+  zeroSpeedSinceMs.value = null
   if (testSamples.value.length < 2) return
   const run = buildRunObject()
   savedRuns.value = [run, ...savedRuns.value].slice(0, 60)
@@ -414,9 +424,15 @@ function stopAndSaveTest() {
 
 function resetCurrentTest() {
   testRunning.value = false
+  zeroSpeedSinceMs.value = null
   testSamples.value = []
   testMilestones.value = createMilestones()
   latestRun.value = null
+}
+
+function cancelLaunchPrompt() {
+  launchPromptVisible.value = false
+  testAutoArmed.value = false
 }
 
 function loadRunAsPrimary(run) {
@@ -607,11 +623,31 @@ function connectTelemetrySocket() {
         lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
 
         const autoCondition = (payload.data.handBrake ?? 0) >= 100 && (payload.data.accel ?? 0) >= 100
-        if (autoCondition && testAutoArmed.value && !testRunning.value) {
-          startAccelerationTest()
-          testAutoArmed.value = false
+
+        if (activeView.value === 'accelTest' && !testRunning.value) {
+          if (autoCondition && testAutoArmed.value && !launchPromptVisible.value) {
+            launchPromptVisible.value = true
+          }
+
+          if (launchPromptVisible.value) {
+            const handBrakeReleased = (payload.data.handBrake ?? 0) < 100
+            const accelStillPressed = (payload.data.accel ?? 0) >= 100
+
+            if (handBrakeReleased && accelStillPressed) {
+              launchPromptVisible.value = false
+              startAccelerationTest()
+              testAutoArmed.value = false
+            }
+
+            if (!accelStillPressed) {
+              launchPromptVisible.value = false
+              testAutoArmed.value = false
+            }
+          }
         }
+
         if (!autoCondition) {
+          if (!testRunning.value) launchPromptVisible.value = false
           testAutoArmed.value = true
         }
 
@@ -650,6 +686,10 @@ watch(
     importedRun.value?.id,
   ],
   async () => {
+    if (activeView.value !== 'accelTest') {
+      launchPromptVisible.value = false
+      testAutoArmed.value = true
+    }
     if (activeView.value === 'accelTest') {
       await nextTick()
       drawAccelerationChart()
@@ -791,14 +831,11 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else class="accel-page card" :style="accelPageStyle">
-        <section class="card">
-          <p class="tips">点击开始测试或弹射起步以开始测试</p>
-          <p class="tips">实时速度与G值已并入“加速成绩”卡片</p>
-        </section>
+        <p class="tips tips-small">点击开始测试或弹射起步以开始测试，点击停止测试以结束测试</p>
 
         <section class="card accel-actions">
           <button class="action-btn primary" @click="startAccelerationTest" :disabled="testRunning">开始测试</button>
-          <button class="action-btn" @click="stopAndSaveTest" :disabled="!testRunning">停止并保存</button>
+          <button class="action-btn" @click="stopAndSaveTest" :disabled="!testRunning">停止测试</button>
           <button class="action-btn" @click="resetCurrentTest">清空当前</button>
           <button class="action-btn" @click="exportChartImage" :disabled="!primaryRun">保存曲线图片</button>
           <button class="action-btn" @click="exportGChartImage" :disabled="!primaryRun">保存G值图片</button>
@@ -857,6 +894,15 @@ onBeforeUnmount(() => {
     <div v-if="isGamePaused" class="modal-mask">
       <div class="modal-card">
         <h3>游戏已暂停</h3>
+      </div>
+    </div>
+
+    <div v-if="launchPromptVisible && activeView === 'accelTest' && !isGamePaused" class="modal-mask">
+      <div class="modal-card">
+        <h3>已检测到弹射起步，松开手刹以开始测试</h3>
+        <div class="modal-actions">
+          <button class="action-btn" @click="cancelLaunchPrompt">取消</button>
+        </div>
       </div>
     </div>
   </main>

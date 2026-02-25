@@ -163,14 +163,19 @@ const manualStartPromptVisible = ref(false)
 const manualStartArmed = ref(false)
 const manualCountdownStartMs = ref(null)
 const manualCountdownElapsedMs = ref(0)
-const dashToAccelPromptVisible = ref(false)
-const dashToAccelCancelled = ref(false)
-const dashToAccelHoldStartMs = ref(null)
-const dashToAccelHoldProgress = ref(0)
+const launchModeActive = ref(false)
+const launchStarted = ref(false)
+const launchStartMs = ref(0)
+const launchMilestones = ref(createMilestones())
+const launchZeroSinceMs = ref(null)
 const dashModePromptVisible = ref(false)
 const dashModeCancelled = ref(false)
 const dashModeHoldStartMs = ref(null)
 const dashModeHoldProgress = ref(0)
+const dashEnterAccelPromptVisible = ref(false)
+const dashEnterAccelCancelled = ref(false)
+const dashEnterAccelHoldStartMs = ref(null)
+const dashEnterAccelHoldProgress = ref(0)
 const testSamples = ref([])
 const runningSummary = ref(createEmptySummary())
 const testMilestones = ref(createMilestones())
@@ -185,6 +190,7 @@ const importedRun = ref(null)
 const accelRenderSerial = ref(0)
 const chartHover = ref({})
 const chartMeta = ref({})
+const isFullscreen = ref(false)
 let testEndNoticeTimer = null
 let lastAccelRenderAtMs = 0
 let manualStartTimer = null
@@ -279,6 +285,35 @@ const manualWaitingForStill = computed(() => manualStartArmed.value && manualCou
 const manualStartProgress = computed(() => {
   if (!manualStartArmed.value || manualCountdownStartMs.value === null) return 0
   return Math.max(0, Math.min(100, (manualCountdownElapsedMs.value / 30000) * 100))
+})
+
+const launchRpmColor = computed(() => {
+  if (rpmRatio.value >= 0.9) return '#ef4444'
+  if (rpmRatio.value >= 0.8) return '#fde047'
+  if (rpmRatio.value >= 0.5) return '#86efac'
+  return '#93c5fd'
+})
+
+const launchFrameColor = computed(() => {
+  if (rpmRatio.value >= 0.9) return '#ef4444'
+  if (rpmRatio.value >= 0.8) return '#fde047'
+  return 'transparent'
+})
+
+const launchMetrics = computed(() => {
+  const m = launchMilestones.value
+  if (!launchStarted.value || speedKmhValue.value <= 0.5) {
+    return [
+      { label: '0-100km/h', value: '0-100km/h' },
+      { label: '0-200km/h', value: '0-200km/h' },
+      { label: '0-300km/h', value: '0-300km/h' },
+    ]
+  }
+  return [
+    { label: '0-100km/h', value: formatSec(m.to100) },
+    { label: '0-200km/h', value: formatSec(m.to200) },
+    { label: '0-300km/h', value: formatSec(m.to300) },
+  ]
 })
 
 const accelMetrics = computed(() => {
@@ -498,6 +533,59 @@ function cancelManualStart() {
 
 function ignorePauseModal() {
   pauseIgnored.value = true
+}
+
+function syncFullscreenState() {
+  isFullscreen.value = Boolean(document.fullscreenElement)
+}
+
+async function toggleFullscreen() {
+  try {
+    if (!document.fullscreenElement) {
+      await document.documentElement.requestFullscreen()
+    } else {
+      await document.exitFullscreen()
+    }
+  } catch (error) {
+    console.error(error)
+  }
+}
+
+function startLaunchMode() {
+  launchModeActive.value = true
+  launchStarted.value = false
+  launchStartMs.value = 0
+  launchMilestones.value = createMilestones()
+  launchZeroSinceMs.value = null
+}
+
+function stopLaunchMode() {
+  launchModeActive.value = false
+  launchStarted.value = false
+  launchStartMs.value = 0
+  launchMilestones.value = createMilestones()
+  launchZeroSinceMs.value = null
+}
+
+function recordLaunchProgress(speed) {
+  const now = performance.now()
+  if (!launchStarted.value) {
+    if (speed > 0.5) {
+      launchStarted.value = true
+      launchStartMs.value = now
+      launchMilestones.value = createMilestones()
+    }
+    return
+  }
+
+  const elapsedSec = (now - launchStartMs.value) / 1000
+  maybeMarkMilestones(speed, elapsedSec)
+
+  if (speed <= 0.5) {
+    if (launchZeroSinceMs.value === null) launchZeroSinceMs.value = now
+  } else {
+    launchZeroSinceMs.value = null
+  }
 }
 
 function startAccelerationTest() {
@@ -1091,32 +1179,43 @@ function connectTelemetrySocket() {
         const brake = Number(payload.data.brake || 0)
 
         if (activeView.value === 'dashboard') {
-          const dashTrigger = handBrake >= 100 && brake >= 100
-          if (dashTrigger && !dashToAccelCancelled.value && !dashToAccelPromptVisible.value) {
-            dashToAccelPromptVisible.value = true
-            dashToAccelHoldStartMs.value = performance.now()
-            dashToAccelHoldProgress.value = 0
+          const dashEnterTrigger = handBrake >= 100 && brake >= 100
+          if (dashEnterTrigger && !dashEnterAccelCancelled.value && !dashEnterAccelPromptVisible.value) {
+            dashEnterAccelPromptVisible.value = true
+            dashEnterAccelHoldStartMs.value = performance.now()
+            dashEnterAccelHoldProgress.value = 0
           }
-          if (dashToAccelPromptVisible.value) {
-            if (!dashTrigger) {
-              dashToAccelPromptVisible.value = false
-              dashToAccelCancelled.value = false
-              dashToAccelHoldStartMs.value = null
-              dashToAccelHoldProgress.value = 0
+          if (dashEnterAccelPromptVisible.value) {
+            if (!dashEnterTrigger) {
+              dashEnterAccelPromptVisible.value = false
+              dashEnterAccelCancelled.value = false
+              dashEnterAccelHoldStartMs.value = null
+              dashEnterAccelHoldProgress.value = 0
             } else {
-              const elapsed = performance.now() - (dashToAccelHoldStartMs.value || performance.now())
-              dashToAccelHoldProgress.value = Math.max(0, Math.min(100, (elapsed / 2000) * 100))
-              if (dashToAccelHoldProgress.value >= 100) {
-                dashToAccelPromptVisible.value = false
-                dashToAccelHoldStartMs.value = null
-                dashToAccelHoldProgress.value = 0
-                dashToAccelCancelled.value = false
+              const enterElapsed = performance.now() - (dashEnterAccelHoldStartMs.value || performance.now())
+              dashEnterAccelHoldProgress.value = Math.max(0, Math.min(100, (enterElapsed / 2000) * 100))
+              if (dashEnterAccelHoldProgress.value >= 100) {
+                dashEnterAccelPromptVisible.value = false
+                dashEnterAccelCancelled.value = false
+                dashEnterAccelHoldStartMs.value = null
+                dashEnterAccelHoldProgress.value = 0
                 activeView.value = 'accelTest'
-                startAccelerationTest()
               }
             }
-          } else if (!dashTrigger) {
-            dashToAccelCancelled.value = false
+          } else if (!dashEnterTrigger) {
+            dashEnterAccelCancelled.value = false
+          }
+
+          const launchTrigger = handBrake >= 100 && accel >= 100 && brake < 100
+          if (launchTrigger && !launchModeActive.value) {
+            startLaunchMode()
+          }
+
+          if (launchModeActive.value) {
+            recordLaunchProgress(speed)
+            if (brake >= 100) {
+              stopLaunchMode()
+            }
           }
         }
 
@@ -1254,10 +1353,11 @@ watch(
       dashModeHoldProgress.value = 0
     }
     if (activeView.value !== 'dashboard') {
-      dashToAccelPromptVisible.value = false
-      dashToAccelCancelled.value = false
-      dashToAccelHoldStartMs.value = null
-      dashToAccelHoldProgress.value = 0
+      stopLaunchMode()
+      dashEnterAccelPromptVisible.value = false
+      dashEnterAccelCancelled.value = false
+      dashEnterAccelHoldStartMs.value = null
+      dashEnterAccelHoldProgress.value = 0
     }
     if (activeView.value === 'accelTest') {
       if (disableRealtimeDrawing.value && testRunning.value) return
@@ -1288,8 +1388,10 @@ watch(
 )
 
 onMounted(() => {
+  syncFullscreenState()
   connectTelemetrySocket()
   loadRunsFromStorage()
+  document.addEventListener('fullscreenchange', syncFullscreenState)
   window.addEventListener('resize', handleResize)
 })
 
@@ -1298,6 +1400,7 @@ onBeforeUnmount(() => {
   if (testEndNoticeTimer) clearTimeout(testEndNoticeTimer)
   clearManualStartTimer()
   dashModeHoldStartMs.value = null
+  document.removeEventListener('fullscreenchange', syncFullscreenState)
   window.removeEventListener('resize', handleResize)
 })
 </script>
@@ -1317,7 +1420,22 @@ onBeforeUnmount(() => {
       >
         {{ navCollapsed ? item.label.slice(0, 2) : item.label }}
       </button>
+      <button class="nav-btn nav-fullscreen" @click="toggleFullscreen">
+        {{ navCollapsed ? '全' : (isFullscreen ? '退出全屏' : '全屏') }}
+      </button>
     </nav>
+    <div v-if="dashEnterAccelPromptVisible && activeView === 'dashboard' && !isGamePaused" class="modal-mask">
+      <div class="modal-card">
+        <h3>按住2秒进入加速测试模式</h3>
+        <div class="modal-progress-track">
+          <div class="modal-progress-fill" :style="{ width: `${dashEnterAccelHoldProgress}%` }"></div>
+        </div>
+        <div class="modal-actions">
+          <button class="action-btn small-btn" @click="dashEnterAccelPromptVisible = false; dashEnterAccelCancelled = true; dashEnterAccelHoldStartMs = null; dashEnterAccelHoldProgress = 0">取消</button>
+        </div>
+      </div>
+    </div>
+
 
     <section class="content">
       <template v-if="activeView === 'overview'">
@@ -1547,18 +1665,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="dashToAccelPromptVisible && activeView === 'dashboard' && !isGamePaused" class="modal-mask">
-      <div class="modal-card">
-        <h3>按住2秒进入加速测试模式</h3>
-        <div class="modal-progress-track">
-          <div class="modal-progress-fill" :style="{ width: `${dashToAccelHoldProgress}%` }"></div>
-        </div>
-        <div class="modal-actions">
-          <button class="action-btn small-btn" @click="dashToAccelPromptVisible = false; dashToAccelCancelled = true; dashToAccelHoldStartMs = null; dashToAccelHoldProgress = 0">取消</button>
-        </div>
-      </div>
-    </div>
-
     <div v-if="dashModePromptVisible && activeView === 'accelTest' && !isGamePaused" class="modal-mask">
       <div class="modal-card">
         <h3>按住2秒以进入仪表模式</h3>
@@ -1642,6 +1748,27 @@ onBeforeUnmount(() => {
             </div>
           </section>
         </section>
+      </div>
+    </div>
+
+    <div v-if="launchModeActive && activeView === 'dashboard'" class="launch-overlay">
+      <div class="launch-frame" :style="{ borderColor: launchFrameColor }">
+        <div class="launch-lines left"></div>
+        <div class="launch-lines right"></div>
+        <div class="launch-stars"></div>
+        <div class="launch-speed">
+          <strong>{{ toNumber(speedKmhValue, 1) }}</strong>
+          <span>km/h</span>
+        </div>
+        <div class="launch-rpm-track">
+          <div class="launch-rpm-fill" :style="{ width: `${Math.max(0, Math.min(100, rpmRatio * 100))}%`, backgroundColor: launchRpmColor }"></div>
+        </div>
+        <div class="launch-metrics">
+          <div class="launch-metric" v-for="item in launchMetrics" :key="item.label">
+            <span>{{ item.label }}</span>
+            <strong>{{ item.value }}</strong>
+          </div>
+        </div>
       </div>
     </div>
   </main>

@@ -1,14 +1,27 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import fh5CarMapData from './fh5CarMap.json'
 
 const wsPort = Number(import.meta.env.VITE_WS_PORT || 8080)
 const wsHost = import.meta.env.VITE_WS_HOST || window.location.hostname
 const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
 const wsUrl = `${wsProtocol}://${wsHost}:${wsPort}`
+const storageKey = 'fh-accel-tests-v1'
+
+const activeView = ref('overview')
 const connectionStatus = ref('未连接')
 const lastUpdated = ref('-')
 const telemetry = ref(null)
+const chartCanvas = ref(null)
 let ws = null
+
+const navItems = [
+  { key: 'overview', label: '数据包总览' },
+  { key: 'dashboard', label: '仪表盘' },
+  { key: 'accelTest', label: '加速测试' },
+]
+
+const fh5CarMap = fh5CarMapData.cars || {}
 
 const metricSections = [
   {
@@ -32,7 +45,16 @@ const metricSections = [
       { key: 'currentEngineRpm', label: '当前转速', unit: 'rpm', digits: 0 },
       { key: 'engineIdleRpm', label: '怠速转速', unit: 'rpm', digits: 0 },
       { key: 'engineMaxRpm', label: '最大转速', unit: 'rpm', digits: 0 },
-      { key: 'gearDisplay', label: '档位' },
+      {
+        key: 'gearDisplay',
+        label: '档位',
+        format: (value, all) => {
+          if (all?.gearRaw === 0) return 'R'
+          if (all?.gearRaw !== null && all?.gearRaw !== undefined) return `${all.gearRaw}`
+          if (value === 'N') return '1'
+          return value ?? '--'
+        },
+      },
       { key: 'boost', label: '增压值', digits: 2 },
       { key: 'fuel', label: '油量', digits: 2 },
       { key: 'power', label: '功率', digits: 2 },
@@ -51,29 +73,15 @@ const metricSections = [
       { key: 'normalizedAiBrakeDifference', label: 'AI刹车差值' },
     ],
   },
-  {
-    title: '运动状态',
-    items: [
-      { key: 'velocityX', label: '速度 X', unit: 'm/s', digits: 2 },
-      { key: 'velocityY', label: '速度 Y', unit: 'm/s', digits: 2 },
-      { key: 'velocityZ', label: '速度 Z', unit: 'm/s', digits: 2 },
-      { key: 'accelerationX', label: '加速度 X', unit: 'm/s²', digits: 2 },
-      { key: 'accelerationY', label: '加速度 Y', unit: 'm/s²', digits: 2 },
-      { key: 'accelerationZ', label: '加速度 Z', unit: 'm/s²', digits: 2 },
-      { key: 'yaw', label: '偏航', digits: 3 },
-      { key: 'pitch', label: '俯仰', digits: 3 },
-      { key: 'roll', label: '横滚', digits: 3 },
-      { key: 'positionX', label: '世界坐标 X', digits: 2 },
-      { key: 'positionY', label: '世界坐标 Y', digits: 2 },
-      { key: 'positionZ', label: '世界坐标 Z', digits: 2 },
-    ],
-  },
 ]
 
 const vehicleInfo = computed(() => {
   if (!telemetry.value) return []
+  const carOrdinal = telemetry.value.carOrdinal
+  const carName = fh5CarMap[String(carOrdinal)] || `未知车辆（ID: ${carOrdinal}）`
   return [
     { label: '车辆ID', value: telemetry.value.carOrdinal },
+    { label: '车辆名称', value: carName },
     { label: '车辆等级', value: telemetry.value.carClass },
     { label: '性能指数 PI', value: telemetry.value.carPerformanceIndex },
     { label: '传动形式', value: telemetry.value.drivetrainType },
@@ -84,18 +92,379 @@ const vehicleInfo = computed(() => {
   ]
 })
 
+const isGamePaused = computed(() => {
+  if (!telemetry.value) return false
+  return (
+    telemetry.value.carOrdinal === 0 &&
+    telemetry.value.carClass === 0 &&
+    telemetry.value.carPerformanceIndex === 0
+  )
+})
+
+const speedKmhValue = computed(() => Math.max(0, Number(telemetry.value?.speedKmh || 0)))
+const rpmValue = computed(() => Math.max(0, Number(telemetry.value?.currentEngineRpm || 0)))
+const rpmMax = computed(() => {
+  const value = Number(telemetry.value?.engineMaxRpm || 0)
+  return value > 0 ? value : 10000
+})
+
+const brakePercent = computed(() => Math.max(0, Math.min(100, Number(telemetry.value?.brake || 0))))
+const accelPercent = computed(() => Math.max(0, Math.min(100, Number(telemetry.value?.accel || 0))))
+const steerPercent = computed(() => {
+  const value = Number(telemetry.value?.steerPercent || 0)
+  return Math.max(-100, Math.min(100, value))
+})
+
+const rpmRatio = computed(() => Math.max(0, Math.min(1, rpmValue.value / Math.max(1, rpmMax.value))))
+const aiBrakeRatio = computed(() => {
+  const raw = Number(telemetry.value?.normalizedAiBrakeDifference || 0)
+  return Math.max(0, Math.min(1, Math.abs(raw) / 127))
+})
+
+const dashUpperStyle = computed(() => ({ backgroundColor: zoneColor(rpmRatio.value) }))
+const dashLowerStyle = computed(() => ({ backgroundColor: zoneColor(aiBrakeRatio.value) }))
+
+const speedGaugeStyle = computed(() => getGaugeStyle(speedKmhValue.value, 420, '#2563eb'))
+const rpmGaugeStyle = computed(() => getGaugeStyle(rpmValue.value, rpmMax.value, zoneColor(rpmRatio.value)))
+
+const dashLeftInfo = computed(() => {
+  const data = telemetry.value
+  if (!data) return []
+  return [
+    data.carClass ?? '--',
+    data.carPerformanceIndex ?? '--',
+    data.drivetrainType || '--',
+    data.numCylinders === 0 ? '纯电动' : (data.numCylinders ?? '--'),
+  ]
+})
+
+const dashRightInfo = computed(() => {
+  const data = telemetry.value
+  if (!data) return []
+  return [
+    data.isRaceOn === 1 ? '是' : '否',
+    data.lapNumber ?? '--',
+    data.racePosition ?? '--',
+    `${toNumber(data.bestLap, 3)} s`,
+    `${toNumber(data.lastLap, 3)} s`,
+    `${toNumber(data.currentLap, 3)} s`,
+  ]
+})
+
+const testRunning = ref(false)
+const testAutoArmed = ref(true)
+const testStartMs = ref(0)
+const testSamples = ref([])
+const testMilestones = ref(createMilestones())
+const testMeta = ref(null)
+const latestRun = ref(null)
+const savedRuns = ref([])
+const selectedCompareId = ref('')
+const importedRun = ref(null)
+
+const primaryRun = computed(() => {
+  if (testRunning.value) {
+    return {
+      id: 'running',
+      title: `进行中：${testMeta.value?.carName || '未知车辆'}`,
+      samples: testSamples.value,
+    }
+  }
+  if (latestRun.value) {
+    return {
+      id: latestRun.value.id,
+      title: `${latestRun.value.carName} ${new Date(latestRun.value.timestamp).toLocaleString('zh-CN')}`,
+      samples: latestRun.value.samples,
+    }
+  }
+  return null
+})
+
+const compareRun = computed(() => {
+  if (selectedCompareId.value) {
+    const found = savedRuns.value.find((item) => item.id === selectedCompareId.value)
+    if (found) {
+      return {
+        id: found.id,
+        title: `${found.carName} ${new Date(found.timestamp).toLocaleString('zh-CN')}`,
+        samples: found.samples,
+      }
+    }
+  }
+  if (importedRun.value) {
+    return {
+      id: importedRun.value.id,
+      title: `导入：${importedRun.value.carName}`,
+      samples: importedRun.value.samples,
+    }
+  }
+  return null
+})
+
+const accelMetrics = computed(() => {
+  const m = testRunning.value ? testMilestones.value : (latestRun.value?.milestones || createMilestones())
+  return [
+    { label: '0-100 km/h', value: formatSec(m.to100) },
+    { label: '0-200 km/h', value: formatSec(m.to200) },
+    { label: '0-300 km/h', value: formatSec(m.to300) },
+    { label: '0-400 km/h', value: formatSec(m.to400) },
+    { label: '100-200 km/h', value: formatSec(segmentTime(m.to100, m.to200)) },
+    { label: '200-300 km/h', value: formatSec(segmentTime(m.to200, m.to300)) },
+    { label: '300-400 km/h', value: formatSec(segmentTime(m.to300, m.to400)) },
+  ]
+})
+
+function createMilestones() {
+  return {
+    to100: null,
+    to200: null,
+    to300: null,
+    to400: null,
+  }
+}
+
+function zoneColor(ratio) {
+  if (ratio >= 0.9) return '#fca5a5'
+  if (ratio >= 0.8) return '#fde047'
+  if (ratio >= 0.5) return '#86efac'
+  return '#93c5fd'
+}
+
+function getGaugeStyle(value, max, color) {
+  const safeMax = Math.max(1, max)
+  const ratio = Math.max(0, Math.min(1, value / safeMax))
+  const degree = Math.round(ratio * 360)
+  return {
+    background: `conic-gradient(${color} ${degree}deg, #e5e7eb ${degree}deg 360deg)`,
+  }
+}
+
 function toNumber(value, digits = 2) {
   if (value === null || value === undefined || Number.isNaN(value)) return '--'
   if (typeof value === 'number') return value.toFixed(digits)
   return value
 }
 
+function formatSec(value) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '--'
+  return `${value.toFixed(3)} s`
+}
+
+function segmentTime(from, to) {
+  if (from === null || to === null || from === undefined || to === undefined) return null
+  return Math.max(0, to - from)
+}
+
 function formatValue(item) {
   if (!telemetry.value) return '--'
   const value = telemetry.value[item.key]
-  if (item.format) return item.format(value)
+  if (item.format) return item.format(value, telemetry.value)
   const displayValue = typeof value === 'number' ? toNumber(value, item.digits ?? 0) : value ?? '--'
   return item.unit ? `${displayValue} ${item.unit}` : `${displayValue}`
+}
+
+function startAccelerationTest() {
+  if (testRunning.value) return
+  testRunning.value = true
+  testStartMs.value = performance.now()
+  testMilestones.value = createMilestones()
+  testSamples.value = [{ t: 0, speed: speedKmhValue.value }]
+  const carOrdinal = telemetry.value?.carOrdinal ?? 0
+  testMeta.value = {
+    carOrdinal,
+    carName: fh5CarMap[String(carOrdinal)] || `未知车辆（ID: ${carOrdinal}）`,
+  }
+}
+
+function maybeMarkMilestones(speed, elapsedSec) {
+  const marks = testMilestones.value
+  if (marks.to100 === null && speed >= 100) marks.to100 = elapsedSec
+  if (marks.to200 === null && speed >= 200) marks.to200 = elapsedSec
+  if (marks.to300 === null && speed >= 300) marks.to300 = elapsedSec
+  if (marks.to400 === null && speed >= 400) {
+    marks.to400 = elapsedSec
+    return true
+  }
+  return false
+}
+
+function recordAccelerationSample(data) {
+  if (!testRunning.value) return
+  const now = performance.now()
+  const elapsedSec = (now - testStartMs.value) / 1000
+  const speed = Math.max(0, Number(data.speedKmh || 0))
+  const last = testSamples.value[testSamples.value.length - 1]
+  if (!last || elapsedSec - last.t >= 0.05 || Math.abs(speed - last.speed) >= 0.5) {
+    testSamples.value.push({ t: elapsedSec, speed })
+  }
+  const reached400 = maybeMarkMilestones(speed, elapsedSec)
+  if (reached400) {
+    stopAndSaveTest()
+  }
+}
+
+function buildRunObject() {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    timestamp: Date.now(),
+    carOrdinal: testMeta.value?.carOrdinal ?? 0,
+    carName: testMeta.value?.carName ?? '未知车辆',
+    samples: [...testSamples.value],
+    milestones: { ...testMilestones.value },
+  }
+}
+
+function saveRunsToStorage() {
+  localStorage.setItem(storageKey, JSON.stringify(savedRuns.value))
+}
+
+function loadRunsFromStorage() {
+  try {
+    const raw = localStorage.getItem(storageKey)
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) {
+      savedRuns.value = parsed.filter((item) => Array.isArray(item.samples) && item.samples.length > 0)
+    }
+  } catch (error) {
+    console.error(error)
+  }
+}
+
+function stopAndSaveTest() {
+  if (!testRunning.value) return
+  testRunning.value = false
+  if (testSamples.value.length < 2) return
+  const run = buildRunObject()
+  savedRuns.value = [run, ...savedRuns.value].slice(0, 60)
+  latestRun.value = run
+  saveRunsToStorage()
+}
+
+function resetCurrentTest() {
+  testRunning.value = false
+  testSamples.value = []
+  testMilestones.value = createMilestones()
+  latestRun.value = null
+}
+
+function loadRunAsPrimary(run) {
+  latestRun.value = run
+  testRunning.value = false
+  testSamples.value = []
+  testMilestones.value = { ...run.milestones }
+}
+
+function exportCurrentRunTxt() {
+  const run = latestRun.value
+  if (!run) return
+  const blob = new Blob([JSON.stringify(run, null, 2)], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `accel-test-${run.carOrdinal}-${run.timestamp}.txt`
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+function handleImportTxt(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(String(reader.result || '{}'))
+      if (!Array.isArray(parsed.samples) || parsed.samples.length < 2) return
+      importedRun.value = {
+        id: `import-${Date.now()}`,
+        carName: parsed.carName || '导入数据',
+        samples: parsed.samples,
+      }
+    } catch (error) {
+      console.error(error)
+    }
+  }
+  reader.readAsText(file)
+  event.target.value = ''
+}
+
+function drawCurveOnCanvas(context, canvas, run, color, xMax, yMax, left, top, width, height) {
+  if (!run || !Array.isArray(run.samples) || run.samples.length < 2) return
+  context.strokeStyle = color
+  context.lineWidth = 2
+  context.beginPath()
+  run.samples.forEach((sample, index) => {
+    const x = left + (Math.max(0, sample.t) / xMax) * width
+    const y = top + height - (Math.max(0, sample.speed) / yMax) * height
+    if (index === 0) context.moveTo(x, y)
+    else context.lineTo(x, y)
+  })
+  context.stroke()
+}
+
+function drawAccelerationChart() {
+  const canvas = chartCanvas.value
+  if (!canvas) return
+  const rect = canvas.getBoundingClientRect()
+  const dpr = window.devicePixelRatio || 1
+  canvas.width = Math.max(1, Math.floor(rect.width * dpr))
+  canvas.height = Math.max(1, Math.floor(rect.height * dpr))
+  const context = canvas.getContext('2d')
+  if (!context) return
+  context.scale(dpr, dpr)
+
+  context.clearRect(0, 0, rect.width, rect.height)
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, rect.width, rect.height)
+
+  const left = 44
+  const right = 14
+  const top = 14
+  const bottom = 30
+  const width = rect.width - left - right
+  const height = rect.height - top - bottom
+
+  context.strokeStyle = '#d1d5db'
+  context.lineWidth = 1
+  context.strokeRect(left, top, width, height)
+
+  const runs = [primaryRun.value, compareRun.value].filter(Boolean)
+  if (runs.length === 0) return
+
+  const maxT = Math.max(...runs.flatMap((run) => run.samples.map((sample) => sample.t)), 5)
+  const maxV = Math.max(...runs.flatMap((run) => run.samples.map((sample) => sample.speed)), 100)
+  const xMax = Math.ceil(maxT)
+  const yMax = Math.max(100, Math.ceil(maxV / 20) * 20)
+
+  drawCurveOnCanvas(context, canvas, primaryRun.value, '#2563eb', xMax, yMax, left, top, width, height)
+  drawCurveOnCanvas(context, canvas, compareRun.value, '#ef4444', xMax, yMax, left, top, width, height)
+
+  context.fillStyle = '#6b7280'
+  context.font = '11px sans-serif'
+  context.fillText('时间(s)', left + width - 48, rect.height - 8)
+  context.fillText('车速(km/h)', 4, top + 10)
+
+  context.fillStyle = '#111827'
+  context.fillText('主曲线', left + 4, top + 14)
+  context.fillStyle = '#2563eb'
+  context.fillRect(left + 42, top + 7, 18, 3)
+
+  if (compareRun.value) {
+    context.fillStyle = '#111827'
+    context.fillText('对比', left + 70, top + 14)
+    context.fillStyle = '#ef4444'
+    context.fillRect(left + 98, top + 7, 18, 3)
+  }
+}
+
+function exportChartImage() {
+  const canvas = chartCanvas.value
+  if (!canvas) return
+  const url = canvas.toDataURL('image/png')
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `accel-curve-${Date.now()}.png`
+  anchor.click()
 }
 
 function connectTelemetrySocket() {
@@ -112,6 +481,17 @@ function connectTelemetrySocket() {
       if (payload.type === 'telemetry') {
         telemetry.value = payload.data
         lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+
+        const autoCondition = (payload.data.handBrake ?? 0) >= 100 && (payload.data.accel ?? 0) >= 100
+        if (autoCondition && testAutoArmed.value && !testRunning.value) {
+          startAccelerationTest()
+          testAutoArmed.value = false
+        }
+        if (!autoCondition) {
+          testAutoArmed.value = true
+        }
+
+        recordAccelerationSample(payload.data)
       }
     } catch (error) {
       connectionStatus.value = '数据解析失败'
@@ -129,42 +509,211 @@ function connectTelemetrySocket() {
   }
 }
 
+function handleResize() {
+  if (activeView.value === 'accelTest') {
+    drawAccelerationChart()
+  }
+}
+
+watch(
+  () => [
+    activeView.value,
+    testRunning.value,
+    testSamples.value.length,
+    latestRun.value?.id,
+    selectedCompareId.value,
+    importedRun.value?.id,
+  ],
+  async () => {
+    if (activeView.value === 'accelTest') {
+      await nextTick()
+      drawAccelerationChart()
+    }
+  },
+)
+
 onMounted(() => {
   connectTelemetrySocket()
+  loadRunsFromStorage()
+  window.addEventListener('resize', handleResize)
 })
 
 onBeforeUnmount(() => {
   ws?.close()
+  window.removeEventListener('resize', handleResize)
 })
 </script>
 
 <template>
-  <main class="dashboard">
-    <header class="header">
-      <h1>Forza Horizon 4/5 UDP 遥测面板</h1>
-      <p>连接状态：{{ connectionStatus }}｜最后更新：{{ lastUpdated }}</p>
-      <p class="tips">请先启动 `npm run dev:server`，并在游戏中开启 Data Out (UDP)。</p>
-      <p class="tips">当前数据地址：{{ wsUrl }}</p>
-    </header>
+  <main class="app-shell">
+    <section class="content">
+      <template v-if="activeView === 'overview'">
+        <header class="header card">
+          <h2>数据包总览</h2>
+          <p class="tips">请先启动 `npm run dev:server`，并在游戏中开启 Data Out (UDP)。</p>
+          <p class="tips">连接：{{ connectionStatus }}</p>
+          <p class="tips">更新：{{ lastUpdated }}</p>
+          <p class="tips">地址：{{ wsUrl }}</p>
+        </header>
 
-    <section class="card" v-if="vehicleInfo.length">
-      <h2>车辆信息</h2>
-      <div class="kv-grid">
-        <div class="kv" v-for="item in vehicleInfo" :key="item.label">
-          <span>{{ item.label }}</span>
-          <strong>{{ item.value ?? '--' }}</strong>
-        </div>
-      </div>
+        <section class="card" v-if="vehicleInfo.length">
+          <h3>车辆信息</h3>
+          <div class="kv-grid">
+            <div class="kv" v-for="item in vehicleInfo" :key="item.label">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value ?? '--' }}</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="card" v-for="section in metricSections" :key="section.title">
+          <h3>{{ section.title }}</h3>
+          <div class="kv-grid">
+            <div class="kv" v-for="item in section.items" :key="item.key">
+              <span>{{ item.label }}</span>
+              <strong>{{ formatValue(item) }}</strong>
+            </div>
+          </div>
+        </section>
+      </template>
+
+      <section v-else-if="activeView === 'dashboard'" class="dash-page">
+        <section class="card dash-upper" :style="dashUpperStyle">
+          <div class="dash-top-grid">
+            <div class="mini-grid">
+              <div class="mini-kv" v-for="(item, index) in dashLeftInfo" :key="index">
+                <strong>{{ item }}</strong>
+              </div>
+            </div>
+            <div class="mini-grid">
+              <div class="mini-kv" v-for="(item, index) in dashRightInfo" :key="index">
+                <strong>{{ item }}</strong>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card dash-lower" :style="dashLowerStyle">
+          <div class="center-row">
+            <div class="pedal-card">
+              <span>刹车</span>
+              <div class="pedal-track">
+                <div class="pedal-fill" :style="{ height: `${brakePercent}%` }"></div>
+              </div>
+              <strong>{{ toNumber(brakePercent, 0) }}%</strong>
+            </div>
+
+            <div class="gauge-wrap">
+              <article class="gauge-card">
+                <h3>车速</h3>
+                <div class="gauge" :style="speedGaugeStyle">
+                  <div class="gauge-inner">
+                    <strong>{{ toNumber(speedKmhValue, 1) }}</strong>
+                    <span>km/h</span>
+                  </div>
+                </div>
+              </article>
+
+              <article class="gauge-card">
+                <h3>转速</h3>
+                <div class="gauge" :style="rpmGaugeStyle">
+                  <div class="gauge-inner">
+                    <strong>{{ toNumber(rpmValue, 0) }}</strong>
+                    <span>rpm</span>
+                  </div>
+                </div>
+              </article>
+            </div>
+
+            <div class="pedal-card">
+              <span>油门</span>
+              <div class="pedal-track">
+                <div class="pedal-fill accel" :style="{ height: `${accelPercent}%` }"></div>
+              </div>
+              <strong>{{ toNumber(accelPercent, 0) }}%</strong>
+            </div>
+          </div>
+
+          <div class="steer-section">
+            <span>转向状态</span>
+            <div class="steer-track">
+              <div class="steer-center"></div>
+              <div
+                class="steer-fill"
+                :style="{
+                  left: steerPercent < 0 ? `${50 + steerPercent / 2}%` : '50%',
+                  width: `${Math.abs(steerPercent) / 2}%`,
+                }"
+              ></div>
+            </div>
+            <strong>{{ toNumber(steerPercent, 0) }}%</strong>
+          </div>
+        </section>
+      </section>
+
+      <section v-else class="accel-page">
+        <section class="card accel-actions">
+          <button class="action-btn primary" @click="startAccelerationTest" :disabled="testRunning">开始测试</button>
+          <button class="action-btn" @click="stopAndSaveTest" :disabled="!testRunning">停止并保存</button>
+          <button class="action-btn" @click="resetCurrentTest">清空当前</button>
+          <button class="action-btn" @click="exportChartImage" :disabled="!primaryRun">保存曲线图片</button>
+          <button class="action-btn" @click="exportCurrentRunTxt" :disabled="!latestRun">导出TXT原始数据</button>
+          <label class="action-btn file-btn">
+            加载TXT
+            <input type="file" accept=".txt,application/json,text/plain" @change="handleImportTxt" />
+          </label>
+        </section>
+
+        <section class="card">
+          <h3>加速成绩</h3>
+          <div class="metric-grid">
+            <div class="metric-item" v-for="item in accelMetrics" :key="item.label">
+              <span>{{ item.label }}</span>
+              <strong>{{ item.value }}</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="card chart-card">
+          <h3>加速曲线（时间-车速）</h3>
+          <canvas ref="chartCanvas" class="chart-canvas"></canvas>
+        </section>
+
+        <section class="card">
+          <h3>历史测试（本地存储）</h3>
+          <div class="history-list" v-if="savedRuns.length">
+            <div class="history-item" v-for="run in savedRuns" :key="run.id">
+              <div>
+                <strong>{{ run.carName }}</strong>
+                <p>{{ new Date(run.timestamp).toLocaleString('zh-CN') }}</p>
+              </div>
+              <div class="history-actions">
+                <button class="action-btn" @click="loadRunAsPrimary(run)">主曲线</button>
+                <button class="action-btn" @click="selectedCompareId = run.id">设为对比</button>
+              </div>
+            </div>
+          </div>
+          <p v-else class="tips">暂无测试记录，开始一次测试后会自动保存到本地。</p>
+        </section>
+      </section>
     </section>
 
-    <section class="card" v-for="section in metricSections" :key="section.title">
-      <h2>{{ section.title }}</h2>
-      <div class="kv-grid">
-        <div class="kv" v-for="item in section.items" :key="item.key">
-          <span>{{ item.label }}</span>
-          <strong>{{ formatValue(item) }}</strong>
-        </div>
+    <nav class="bottom-nav card">
+      <button
+        v-for="item in navItems"
+        :key="item.key"
+        class="nav-btn"
+        :class="{ active: activeView === item.key }"
+        @click="activeView = item.key"
+      >
+        {{ item.label }}
+      </button>
+    </nav>
+
+    <div v-if="isGamePaused" class="modal-mask">
+      <div class="modal-card">
+        <h3>游戏已暂停</h3>
       </div>
-    </section>
+    </div>
   </main>
 </template>

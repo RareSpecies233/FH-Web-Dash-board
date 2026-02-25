@@ -56,8 +56,7 @@ function toSteerPercent(value) {
 function toGearDisplay(gear) {
   if (gear === null || gear === undefined) return '--'
   if (gear === 0) return 'R'
-  if (gear === 1) return 'N'
-  return `${gear - 1}`
+  return `${gear}`
 }
 
 export function parseForzaTelemetry(buffer) {

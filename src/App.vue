@@ -25,10 +25,10 @@ const historyTorqueChartCanvas = ref(null)
 let ws = null
 
 const navItems = [
-  { key: 'overview', label: '数据包总览' },
-  { key: 'dashboard', label: '仪表盘' },
-  { key: 'accelTest', label: '加速测试' },
-  { key: 'history', label: '测试历史' },
+  { key: 'overview', label: '数据包总览', icon: '📦' },
+  { key: 'dashboard', label: '仪表盘', icon: '🧭' },
+  { key: 'accelTest', label: '加速测试', icon: '⚡' },
+  { key: 'history', label: '测试历史', icon: '🕘' },
 ]
 
 const fh5CarMap = fh5CarMapData.cars || {}
@@ -201,7 +201,7 @@ let lastAccelRenderAtMs = 0
 let manualStartTimer = null
 let launchBurstTimer = null
 let launchBurstIdSeed = 0
-const MAX_LAUNCH_BURSTS = 140
+const MAX_LAUNCH_BURSTS = 100
 
 const activeSummary = computed(() => {
   if (testRunning.value) return runningSummary.value
@@ -598,7 +598,10 @@ function createLaunchBurst() {
     const travel = (Math.random() * 70 + 78).toFixed(1)
     const thickness = (Math.random() * 6.8 + 2.8).toFixed(2)
     const baseDuration = Math.random() * 1.6 + 1.2
-    const duration = baseDuration * 3
+    // Bake current speed factor into duration at creation time
+    // so this burst's speed is locked and never retreats when speed changes
+    const speedFactor = Math.max(0.1, speedKmhValue.value / 200)
+    const duration = (baseDuration * 3) / speedFactor
     const delay = (Math.random() * 1.4).toFixed(2)
     const startHue = Math.random() > 0.5 ? 'rgba(250, 204, 21, 0.92)' : 'rgba(245, 158, 11, 0.9)'
     const endHue = Math.random() > 0.45 ? 'rgba(239, 68, 68, 0.96)' : 'rgba(220, 38, 38, 0.94)'
@@ -635,22 +638,27 @@ function emitLaunchBursts(count = 8) {
 
 function clearLaunchBurstTimer() {
   if (launchBurstTimer) {
-    clearTimeout(launchBurstTimer)
+    cancelAnimationFrame(launchBurstTimer)
     launchBurstTimer = null
   }
 }
 
 function scheduleLaunchBurstRefresh() {
   clearLaunchBurstTimer()
-  const tick = () => {
+  let lastEmitTs = 0
+  const tick = (now) => {
     if (!launchModeActive.value) return
     const speedFactor = launchBurstSpeedFactor.value
-    const emitCount = Math.max(4, Math.min(12, Math.round(4 + speedFactor * 4)))
-    emitLaunchBursts(emitCount)
-    const nextDelay = Math.max(280, 620 - speedFactor * 160 + Math.random() * 220)
-    launchBurstTimer = setTimeout(tick, nextDelay)
+    // Adaptive emit interval: faster speed → shorter interval → more frequent bursts
+    const interval = Math.max(200, 500 - speedFactor * 140)
+    if (now - lastEmitTs >= interval) {
+      const emitCount = Math.max(3, Math.min(10, Math.round(3 + speedFactor * 3)))
+      emitLaunchBursts(emitCount)
+      lastEmitTs = now
+    }
+    launchBurstTimer = requestAnimationFrame(tick)
   }
-  launchBurstTimer = setTimeout(tick, 320)
+  launchBurstTimer = requestAnimationFrame(tick)
 }
 
 function startLaunchMode() {
@@ -1541,13 +1549,13 @@ onBeforeUnmount(() => {
         :class="{ active: activeView === item.key }"
         @click="activeView = item.key"
       >
-        {{ navCollapsed ? item.label.slice(0, 2) : item.label }}
+        {{ navCollapsed ? item.icon : item.label }}
       </button>
       <button class="nav-btn nav-fullscreen" @click="toggleFullscreen">
-        {{ navCollapsed ? '全' : (isFullscreen ? '退出全屏' : '全屏') }}
+        {{ navCollapsed ? '⛶' : (isFullscreen ? '退出全屏' : '全屏') }}
       </button>
       <button class="nav-btn nav-launch-toggle" :class="{ off: !launchModeEnabled }" @click="toggleLaunchModeEnabled">
-        {{ navCollapsed ? (launchModeEnabled ? '弹开' : '弹关') : (launchModeEnabled ? '关闭弹射模式' : '开启弹射模式') }}
+        {{ navCollapsed ? (launchModeEnabled ? '🚀' : '🛑') : (launchModeEnabled ? '关闭弹射模式' : '开启弹射模式') }}
       </button>
     </nav>
     <div v-if="dashEnterAccelPromptVisible && activeView === 'dashboard' && !isGamePaused" class="modal-mask">
@@ -1878,7 +1886,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="launchModeActive && activeView === 'dashboard'" class="launch-overlay">
-      <div class="launch-frame" :style="{ '--launch-frame-color': launchFrameColor }">
+      <div class="launch-frame" :style="{ '--launch-frame-color': launchFrameColor, '--launch-burst-speed-factor': launchBurstSpeedFactor }">
         <div class="launch-stars">
           <span v-for="star in launchStars" :key="star.id" class="launch-star" :style="star.style"></span>
         </div>

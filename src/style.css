@@ -46,6 +46,13 @@ body {
   width: 56px;
 }
 
+.side-nav.collapsed .nav-btn {
+  text-align: center;
+  font-size: 16px;
+  line-height: 1;
+  padding: 8px 6px;
+}
+
 .nav-toggle {
   appearance: none;
   border: 1px solid #e5e7eb;
@@ -735,6 +742,7 @@ body {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  contain: strict;
 }
 
 .launch-burst-line {

@@ -18,6 +18,7 @@ const chartCanvas = ref(null)
 const gChartCanvas = ref(null)
 const powerChartCanvas = ref(null)
 const torqueChartCanvas = ref(null)
+const launchCanvas = ref(null)
 const historyChartCanvas = ref(null)
 const historyGChartCanvas = ref(null)
 const historyPowerChartCanvas = ref(null)
@@ -171,8 +172,6 @@ const launchElapsedSec = ref(0)
 const launchMilestones = ref(createMilestones())
 const launchZeroSinceMs = ref(null)
 const launchExitBrakeLatched = ref(false)
-const launchStars = ref([])
-const launchBursts = ref([])
 const dashModePromptVisible = ref(false)
 const dashModeCancelled = ref(false)
 const dashModeHoldStartMs = ref(null)
@@ -199,9 +198,10 @@ const isFullscreen = ref(false)
 let testEndNoticeTimer = null
 let lastAccelRenderAtMs = 0
 let manualStartTimer = null
-let launchBurstTimer = null
-let launchBurstIdSeed = 0
-const MAX_LAUNCH_BURSTS = 100
+let launchCanvasFrame = null
+let launchCanvasCtx = null
+let launchStarsField = []
+let launchStreaks = []
 
 const activeSummary = computed(() => {
   if (testRunning.value) return runningSummary.value
@@ -571,94 +571,128 @@ function toggleLaunchModeEnabled() {
   }
 }
 
-function createLaunchStars(count = 90) {
-  return Array.from({ length: count }, (_, index) => {
-    const size = (Math.random() * 2.1 + 0.7).toFixed(2)
-    const opacity = (Math.random() * 0.5 + 0.35).toFixed(2)
-    const duration = (Math.random() * 2.5 + 0.9).toFixed(2)
-    const delay = (Math.random() * 3).toFixed(2)
-    return {
-      id: `s-${index}-${Date.now()}`,
-      style: {
-        left: `${(Math.random() * 100).toFixed(2)}%`,
-        top: `${(Math.random() * 100).toFixed(2)}%`,
-        '--size': `${size}px`,
-        '--opacity': opacity,
-        '--dur': `${duration}s`,
-        '--delay': `${delay}s`,
-      },
-    }
+function randomInRange(min, max) {
+  return Math.random() * (max - min) + min
+}
+
+function clearLaunchCanvasAnimation() {
+  if (launchCanvasFrame) {
+    cancelAnimationFrame(launchCanvasFrame)
+    launchCanvasFrame = null
+  }
+}
+
+function resetLaunchStreak(streak, width, height) {
+  const maxRadius = Math.hypot(width, height) * 0.56
+  streak.angle = randomInRange(0, Math.PI * 2)
+  streak.distance = randomInRange(0, maxRadius * 0.14)
+  streak.length = randomInRange(48, 260)
+  streak.width = randomInRange(1.2, 4.8)
+  streak.alpha = randomInRange(0.55, 0.95)
+  streak.speed = randomInRange(0.65, 2.4)
+}
+
+function ensureLaunchField(width, height) {
+  const area = width * height
+  const starCount = Math.max(80, Math.min(180, Math.floor(area / 22000)))
+  const streakCount = Math.max(90, Math.min(180, Math.floor(area / 14000)))
+
+  launchStarsField = Array.from({ length: starCount }, () => ({
+    x: Math.random() * width,
+    y: Math.random() * height,
+    radius: randomInRange(0.45, 1.65),
+    alpha: randomInRange(0.25, 0.85),
+    twinkle: randomInRange(0.8, 2.4),
+    phase: randomInRange(0, Math.PI * 2),
+  }))
+
+  launchStreaks = Array.from({ length: streakCount }, () => {
+    const streak = { angle: 0, distance: 0, length: 0, width: 0, alpha: 0, speed: 0 }
+    resetLaunchStreak(streak, width, height)
+    return streak
   })
 }
 
-function createLaunchBurst() {
-  const index = launchBurstIdSeed++
-    const angle = (Math.random() * 360).toFixed(1)
-    const length = (Math.random() * 320 + 150).toFixed(1)
-    const travel = (Math.random() * 70 + 78).toFixed(1)
-    const thickness = (Math.random() * 6.8 + 2.8).toFixed(2)
-    const baseDuration = Math.random() * 1.6 + 1.2
-    // Bake current speed factor into duration at creation time
-    // so this burst's speed is locked and never retreats when speed changes
-    const speedFactor = Math.max(0.1, speedKmhValue.value / 200)
-    const duration = (baseDuration * 3) / speedFactor
-    const delay = (Math.random() * 1.4).toFixed(2)
-    const startHue = Math.random() > 0.5 ? 'rgba(250, 204, 21, 0.92)' : 'rgba(245, 158, 11, 0.9)'
-    const endHue = Math.random() > 0.45 ? 'rgba(239, 68, 68, 0.96)' : 'rgba(220, 38, 38, 0.94)'
-    const lifeMs = (duration + Number(delay)) * 1000 + 80
-    return {
-      id: `b-${index}-${Date.now()}`,
-      expireAt: performance.now() + lifeMs,
-      style: {
-        '--angle': `${angle}deg`,
-        '--length': `${length}px`,
-        '--travel': `${travel}vmax`,
-        '--thickness': `${thickness}px`,
-        '--dur': `${duration.toFixed(2)}s`,
-        '--delay': `${delay}s`,
-        '--c1': startHue,
-        '--c2': endHue,
-      },
-    }
+function resizeLaunchCanvas() {
+  const canvas = launchCanvas.value
+  if (!canvas) return
+  const width = window.innerWidth
+  const height = window.innerHeight
+  const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2))
+  canvas.width = Math.round(width * dpr)
+  canvas.height = Math.round(height * dpr)
+  canvas.style.width = `${width}px`
+  canvas.style.height = `${height}px`
+
+  launchCanvasCtx = canvas.getContext('2d')
+  if (!launchCanvasCtx) return
+  launchCanvasCtx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ensureLaunchField(width, height)
 }
 
-function createLaunchBursts(count = 56) {
-  return Array.from({ length: count }, () => createLaunchBurst())
-}
+function drawLaunchCanvas(now) {
+  if (!launchModeActive.value) return
+  const ctx = launchCanvasCtx
+  const canvas = launchCanvas.value
+  if (!ctx || !canvas) return
 
-function emitLaunchBursts(count = 8) {
-  const now = performance.now()
-  const alive = launchBursts.value.filter((item) => item.expireAt > now)
-  const created = Array.from({ length: count }, () => createLaunchBurst())
-  const merged = [...alive, ...created]
-  launchBursts.value = merged.length > MAX_LAUNCH_BURSTS
-    ? merged.slice(merged.length - MAX_LAUNCH_BURSTS)
-    : merged
-}
+  const width = canvas.clientWidth || window.innerWidth
+  const height = canvas.clientHeight || window.innerHeight
+  const centerX = width / 2
+  const centerY = height / 2
+  const maxRadius = Math.hypot(width, height) * 0.56
+  const speedFactor = launchBurstSpeedFactor.value
+  const flightSpeed = Math.max(0.1, speedFactor * 0.5)
 
-function clearLaunchBurstTimer() {
-  if (launchBurstTimer) {
-    cancelAnimationFrame(launchBurstTimer)
-    launchBurstTimer = null
+  ctx.clearRect(0, 0, width, height)
+  ctx.fillStyle = '#02040c'
+  ctx.fillRect(0, 0, width, height)
+
+  for (const star of launchStarsField) {
+    const twinkle = 0.45 + 0.55 * Math.sin(now * 0.0012 * star.twinkle + star.phase)
+    ctx.beginPath()
+    ctx.fillStyle = `rgba(248, 250, 252, ${Math.max(0.08, star.alpha * twinkle)})`
+    ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2)
+    ctx.fill()
   }
+
+  for (const streak of launchStreaks) {
+    streak.distance += streak.speed * (0.5 + flightSpeed)
+    if (streak.distance - streak.length > maxRadius) {
+      resetLaunchStreak(streak, width, height)
+    }
+
+    const distanceStart = Math.max(0, streak.distance - streak.length)
+    const distanceEnd = streak.distance
+    const startX = centerX + Math.cos(streak.angle) * distanceStart
+    const startY = centerY + Math.sin(streak.angle) * distanceStart
+    const endX = centerX + Math.cos(streak.angle) * distanceEnd
+    const endY = centerY + Math.sin(streak.angle) * distanceEnd
+
+    const growth = Math.max(0.9, distanceEnd / Math.max(1, maxRadius))
+    const gradient = ctx.createLinearGradient(startX, startY, endX, endY)
+    gradient.addColorStop(0, `rgba(245, 158, 11, ${0.15 * streak.alpha})`)
+    gradient.addColorStop(0.5, `rgba(251, 191, 36, ${0.5 * streak.alpha})`)
+    gradient.addColorStop(1, `rgba(239, 68, 68, ${Math.min(1, 0.95 * streak.alpha)})`)
+
+    ctx.strokeStyle = gradient
+    ctx.lineWidth = streak.width * (0.75 + growth * 1.8)
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.moveTo(startX, startY)
+    ctx.lineTo(endX, endY)
+    ctx.stroke()
+  }
+
+  launchCanvasFrame = requestAnimationFrame(drawLaunchCanvas)
 }
 
-function scheduleLaunchBurstRefresh() {
-  clearLaunchBurstTimer()
-  let lastEmitTs = 0
-  const tick = (now) => {
-    if (!launchModeActive.value) return
-    const speedFactor = launchBurstSpeedFactor.value
-    // Adaptive emit interval: faster speed → shorter interval → more frequent bursts
-    const interval = Math.max(200, 500 - speedFactor * 140)
-    if (now - lastEmitTs >= interval) {
-      const emitCount = Math.max(3, Math.min(10, Math.round(3 + speedFactor * 3)))
-      emitLaunchBursts(emitCount)
-      lastEmitTs = now
-    }
-    launchBurstTimer = requestAnimationFrame(tick)
-  }
-  launchBurstTimer = requestAnimationFrame(tick)
+function startLaunchCanvasAnimation() {
+  nextTick(() => {
+    resizeLaunchCanvas()
+    clearLaunchCanvasAnimation()
+    launchCanvasFrame = requestAnimationFrame(drawLaunchCanvas)
+  })
 }
 
 function startLaunchMode() {
@@ -669,9 +703,7 @@ function startLaunchMode() {
   launchMilestones.value = createMilestones()
   launchZeroSinceMs.value = null
   launchExitBrakeLatched.value = false
-  launchStars.value = createLaunchStars()
-  launchBursts.value = createLaunchBursts(48)
-  scheduleLaunchBurstRefresh()
+  startLaunchCanvasAnimation()
 }
 
 function stopLaunchMode() {
@@ -682,8 +714,7 @@ function stopLaunchMode() {
   launchMilestones.value = createMilestones()
   launchZeroSinceMs.value = null
   launchExitBrakeLatched.value = false
-  launchBursts.value = []
-  clearLaunchBurstTimer()
+  clearLaunchCanvasAnimation()
 }
 
 function recordLaunchProgress(speed, handBrake) {
@@ -1445,6 +1476,9 @@ function connectTelemetrySocket() {
 }
 
 function handleResize() {
+  if (launchModeActive.value) {
+    resizeLaunchCanvas()
+  }
   if (activeView.value === 'accelTest') {
     if (disableRealtimeDrawing.value && testRunning.value) return
     drawAccelerationChart()
@@ -1529,7 +1563,7 @@ onBeforeUnmount(() => {
   ws?.close()
   if (testEndNoticeTimer) clearTimeout(testEndNoticeTimer)
   clearManualStartTimer()
-  clearLaunchBurstTimer()
+  clearLaunchCanvasAnimation()
   dashModeHoldStartMs.value = null
   document.removeEventListener('fullscreenchange', syncFullscreenState)
   window.removeEventListener('resize', handleResize)
@@ -1886,14 +1920,8 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="launchModeActive && activeView === 'dashboard'" class="launch-overlay">
-      <div class="launch-frame" :style="{ '--launch-frame-color': launchFrameColor, '--launch-burst-speed-factor': launchBurstSpeedFactor }">
-        <div class="launch-stars">
-          <span v-for="star in launchStars" :key="star.id" class="launch-star" :style="star.style"></span>
-        </div>
-        <div class="launch-rear-dark"></div>
-        <div class="launch-bursts">
-          <span v-for="burst in launchBursts" :key="burst.id" class="launch-burst-line" :style="burst.style"></span>
-        </div>
+      <div class="launch-frame" :style="{ '--launch-frame-color': launchFrameColor }">
+        <canvas ref="launchCanvas" class="launch-canvas"></canvas>
         <div class="launch-speed" v-if="launchStarted">
           <strong>{{ toNumber(speedKmhValue, 1) }}</strong>
           <span>km/h</span>

@@ -702,6 +702,15 @@ body {
   overflow: hidden;
 }
 
+.launch-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+
 .launch-frame::after {
   content: '';
   position: absolute;
@@ -711,88 +720,6 @@ body {
     inset 0 0 0 3px var(--launch-frame-color, transparent),
     inset 0 0 36px var(--launch-frame-color, transparent);
   opacity: 0.95;
-}
-
-.launch-stars {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-
-.launch-star {
-  position: absolute;
-  width: var(--size);
-  height: var(--size);
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.95);
-  opacity: var(--opacity);
-  box-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
-  animation: starTwinkle var(--dur) steps(3, end) infinite;
-  animation-delay: var(--delay);
-}
-
-.launch-rear-dark {
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(ellipse at center, rgba(2, 6, 23, 0.08) 14%, rgba(0, 0, 0, 0.92) 76%);
-  pointer-events: none;
-}
-
-.launch-bursts {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  contain: strict;
-}
-
-.launch-burst-line {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: var(--length);
-  height: var(--thickness);
-  transform-origin: 0 50%;
-  transform: rotate(var(--angle)) translateX(0) scaleX(0.2) scaleY(0.8);
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(0, 0, 0, 0) 0%, var(--c1) 34%, var(--c2) 100%);
-  filter: blur(0.75px);
-  opacity: 0;
-  animation-name: burstLaunch;
-  animation-duration: var(--dur);
-  animation-timing-function: linear;
-  animation-iteration-count: 1;
-  animation-delay: var(--delay);
-  animation-fill-mode: forwards;
-  will-change: transform, opacity;
-  pointer-events: none;
-}
-
-@keyframes starTwinkle {
-  from {
-    opacity: calc(var(--opacity) * 0.25);
-    transform: scale(0.85);
-  }
-  to {
-    opacity: var(--opacity);
-    transform: scale(1.15);
-  }
-}
-
-@keyframes burstLaunch {
-  0% {
-    transform: rotate(var(--angle)) translateX(0) scaleX(0.2) scaleY(0.8);
-    opacity: 0;
-  }
-  10% {
-    opacity: 0.95;
-  }
-  88% {
-    opacity: 0.95;
-  }
-  100% {
-    transform: rotate(var(--angle)) translateX(var(--travel)) scaleX(1) scaleY(2.8);
-    opacity: 0;
-  }
 }
 
 .launch-ready {

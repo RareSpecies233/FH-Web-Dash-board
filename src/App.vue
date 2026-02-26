@@ -308,7 +308,7 @@ const launchFrameColor = computed(() => {
 })
 
 const launchBurstSpeedFactor = computed(() => {
-  return Math.max(0.1, speedKmhValue.value / 200)
+  return Math.max(0.05, speedKmhValue.value / 200)
 })
 
 const launchMetrics = computed(() => {
@@ -642,7 +642,8 @@ function drawLaunchCanvas(now) {
   const centerY = height / 2
   const maxRadius = Math.hypot(width, height) * 0.56
   const speedFactor = launchBurstSpeedFactor.value
-  const flightSpeed = Math.max(0.1, speedFactor * 0.5)
+  const flightSpeed = Math.max(0.05, speedFactor * 1.5)
+  const rainbowMode = speedKmhValue.value > 300
 
   ctx.clearRect(0, 0, width, height)
   ctx.fillStyle = '#02040c'
@@ -657,7 +658,7 @@ function drawLaunchCanvas(now) {
   }
 
   for (const streak of launchStreaks) {
-    streak.distance += streak.speed * (0.5 + flightSpeed)
+    streak.distance += streak.speed * (0.25 + flightSpeed)
     if (streak.distance - streak.length > maxRadius) {
       resetLaunchStreak(streak, width, height)
     }
@@ -671,9 +672,16 @@ function drawLaunchCanvas(now) {
 
     const growth = Math.max(0.9, distanceEnd / Math.max(1, maxRadius))
     const gradient = ctx.createLinearGradient(startX, startY, endX, endY)
-    gradient.addColorStop(0, `rgba(245, 158, 11, ${0.15 * streak.alpha})`)
-    gradient.addColorStop(0.5, `rgba(251, 191, 36, ${0.5 * streak.alpha})`)
-    gradient.addColorStop(1, `rgba(239, 68, 68, ${Math.min(1, 0.95 * streak.alpha)})`)
+    if (rainbowMode) {
+      const hueBase = (now * 0.08 + distanceEnd * 0.05) % 360
+      gradient.addColorStop(0, `hsla(${hueBase}, 95%, 64%, ${0.2 * streak.alpha})`)
+      gradient.addColorStop(0.5, `hsla(${(hueBase + 120) % 360}, 96%, 60%, ${0.62 * streak.alpha})`)
+      gradient.addColorStop(1, `hsla(${(hueBase + 240) % 360}, 96%, 58%, ${Math.min(1, 0.98 * streak.alpha)})`)
+    } else {
+      gradient.addColorStop(0, `rgba(245, 158, 11, ${0.15 * streak.alpha})`)
+      gradient.addColorStop(0.5, `rgba(251, 191, 36, ${0.5 * streak.alpha})`)
+      gradient.addColorStop(1, `rgba(239, 68, 68, ${Math.min(1, 0.95 * streak.alpha)})`)
+    }
 
     ctx.strokeStyle = gradient
     ctx.lineWidth = streak.width * (0.75 + growth * 1.8)

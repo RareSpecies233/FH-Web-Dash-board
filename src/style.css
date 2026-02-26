@@ -183,6 +183,11 @@ body {
   gap: 8px;
 }
 
+.dash-page,
+.dash-page * {
+  font-weight: 700 !important;
+}
+
 .dash-upper,
 .dash-lower {
   display: grid;
@@ -687,6 +692,11 @@ body {
   inset: 0;
   z-index: 1600;
   background: #000;
+}
+
+.launch-overlay,
+.launch-overlay * {
+  font-weight: 700 !important;
 }
 
 .launch-frame {
